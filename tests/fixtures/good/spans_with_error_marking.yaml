@@ -1,0 +1,22 @@
+telemetry:
+  instrumentation:
+    spans:
+      mode: spec_compliant
+      default_attribute_requirement_level: required
+      supergraph:
+        attributes:
+          otel.status_code:
+            static: ERROR
+            condition:
+              eq:
+                - true
+                - on_graphql_error: true
+      subgraph:
+        attributes:
+          subgraph.name: true
+          otel.status_code:
+            static: ERROR
+            condition:
+              eq:
+                - true
+                - subgraph_on_graphql_error: true

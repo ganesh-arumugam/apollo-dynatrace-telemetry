@@ -1,0 +1,81 @@
+# Composed supergraph for the demo. Committed so the demo runs without rover.
+# Regenerate after editing demo/subgraph-schemas/*.graphql:
+#   rover supergraph compose --config demo/supergraph.yaml > demo/supergraph.graphql
+schema
+  @link(url: "https://specs.apollo.dev/link/v1.0")
+  @link(url: "https://specs.apollo.dev/join/v0.3", for: EXECUTION)
+{
+  query: Query
+}
+
+directive @join__enumValue(graph: join__Graph!) repeatable on ENUM_VALUE
+
+directive @join__field(graph: join__Graph, requires: join__FieldSet, provides: join__FieldSet, type: String, external: Boolean, override: String, usedOverridden: Boolean) repeatable on FIELD_DEFINITION | INPUT_FIELD_DEFINITION
+
+directive @join__graph(name: String!, url: String!) on ENUM_VALUE
+
+directive @join__implements(graph: join__Graph!, interface: String!) repeatable on OBJECT | INTERFACE
+
+directive @join__type(graph: join__Graph!, key: join__FieldSet, extension: Boolean! = false, resolvable: Boolean! = true, isInterfaceObject: Boolean! = false) repeatable on OBJECT | INTERFACE | UNION | ENUM | INPUT_OBJECT | SCALAR
+
+directive @join__unionMember(graph: join__Graph!, member: String!) repeatable on UNION
+
+directive @link(url: String, as: String, for: link__Purpose, import: [link__Import]) repeatable on SCHEMA
+
+scalar join__FieldSet
+
+scalar link__Import
+
+enum link__Purpose {
+  """
+  `SECURITY` features provide metadata necessary to securely resolve fields.
+  """
+  SECURITY
+
+  """
+  `EXECUTION` features provide metadata necessary for operation execution.
+  """
+  EXECUTION
+}
+
+enum join__Graph {
+  ORDERS @join__graph(name: "orders", url: "http://127.0.0.1:4012/")
+  PRODUCTS @join__graph(name: "products", url: "http://127.0.0.1:4011/")
+}
+
+type Product
+  @join__type(graph: ORDERS, key: "id", resolvable: false)
+  @join__type(graph: PRODUCTS, key: "id")
+{
+  id: ID!
+  title: String! @join__field(graph: PRODUCTS)
+  price: Float! @join__field(graph: PRODUCTS)
+}
+
+type Order
+  @join__type(graph: ORDERS)
+{
+  id: ID!
+  total: Float!
+
+  """
+  Product stubs resolved from the products subgraph via an entity fetch -
+  that fetch is the span worth looking at in Dynatrace.
+  """
+  items: [Product!]!
+}
+
+type Query
+  @join__type(graph: ORDERS)
+  @join__type(graph: PRODUCTS)
+{
+  orders: [Order!]! @join__field(graph: ORDERS)
+  products: [Product!]! @join__field(graph: PRODUCTS)
+  product(id: ID!): Product @join__field(graph: PRODUCTS)
+
+  """
+  Always returns a GraphQL error (with HTTP 200) so the error instruments and
+  the otel.status_code span mapping have something to record.
+  """
+  boom: String @join__field(graph: PRODUCTS)
+}

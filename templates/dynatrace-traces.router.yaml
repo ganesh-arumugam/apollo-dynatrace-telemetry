@@ -1,0 +1,13 @@
+# Traces-only Dynatrace exporter. Drop-in snippet for an existing router.yaml.
+telemetry:
+  exporters:
+    tracing:
+      common:
+        sampler: 0.05
+      otlp:
+        enabled: true
+        protocol: http
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/traces
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"

@@ -1,0 +1,11 @@
+telemetry:
+  exporters:
+    metrics:
+      otlp:
+        enabled: true
+        protocol: http
+        temporality: delta
+        endpoint: https://abc.live.dynatrace.com:443/api/v2/otlp/v1/metrics
+        http:
+          headers:
+            Authorization: "Api-Token dt0c01.ABC123.SECRETSECRETSECRET"

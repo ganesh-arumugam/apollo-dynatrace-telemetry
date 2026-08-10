@@ -1,0 +1,20 @@
+telemetry:
+  exporters:
+    tracing:
+      otlp:
+        enabled: true
+        protocol: http
+        endpoint: https://abc.live.dynatrace.com:443/api/v2/otlp/v1/traces
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+    logging:
+      stdout:
+        enabled: true
+        format:
+          json:
+            display_trace_id: open_telemetry
+      otlp:
+        enabled: true
+        protocol: http
+        endpoint: https://abc.live.dynatrace.com:443/api/v2/otlp/v1/logs

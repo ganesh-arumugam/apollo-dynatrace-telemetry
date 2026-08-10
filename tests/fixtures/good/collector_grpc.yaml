@@ -1,0 +1,22 @@
+telemetry:
+  exporters:
+    tracing:
+      common:
+        sampler: 0.1
+        parent_based_sampler: true
+      otlp:
+        enabled: true
+        protocol: grpc
+        endpoint: http://otel-collector:4317
+    metrics:
+      otlp:
+        enabled: true
+        protocol: grpc
+        temporality: delta
+        endpoint: http://otel-collector:4317
+    logging:
+      stdout:
+        enabled: true
+        format:
+          json:
+            display_trace_id: open_telemetry

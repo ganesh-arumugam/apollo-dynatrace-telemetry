@@ -1,0 +1,279 @@
+# Source of truth for the Dynatrace Platform dashboard.
+#
+# `python3 scripts/build_dashboard.py` renders this into
+# dashboards/dynatrace-dashboard.json (version 17 document format, 24-column
+# grid). The tests assert the JSON matches this file, so the dashboard can never
+# drift from the queries reviewed here.
+#
+# DQL syntax follows the form proven against a live tenant: an inline `filter:`
+# on the timeseries command, `by:` for dimensions, and
+# `| summarize ... | sort | limit` for table tiles.
+#
+# Every custom instrument declared in templates/instruments.router.yaml must
+# appear in at least one tile below — enforced by the test suite.
+
+service_filter: 'service.name == "apollo-router"'
+
+sections:
+  - title: |
+      ## Apollo Router — Dynatrace
+
+      Federated GraphQL gateway telemetry via **OpenTelemetry → Dynatrace**.
+      Metrics are exported with **delta** temporality (Dynatrace does not accept
+      cumulative); traces and logs travel on their own exporters.
+
+      **Config:** `templates/dynatrace.router.yaml` + `templates/instruments.router.yaml`
+      · **Queries:** `dashboards/dql-queries.md` · **Validate:** `scripts/validate_dynatrace.py`
+    height: 4
+
+  - title: "**Overview** — is the graph healthy right now?"
+    tiles:
+      - name: Request Rate
+        viz: singleValue
+        field: requests
+        width: 6
+        query: 'timeseries requests = sum(dynatrace.router.requests), filter: {SERVICE}'
+      - name: 5xx Errors
+        viz: singleValue
+        field: errors
+        width: 6
+        query: 'timeseries errors = sum(dynatrace.router.server.errors), filter: {SERVICE}'
+      # Percentiles come from spans, not the duration histogram. See the note in
+      # the "Latency & overhead" section below for why.
+      - name: p95 Latency (root spans)
+        viz: singleValue
+        field: p95
+        width: 6
+        query: |
+          fetch spans
+          | filter {SERVICE_EXPR} and request.is_root_span == true
+          | summarize p95 = percentile(duration, 95)
+      - name: In-flight Requests
+        viz: singleValue
+        field: active
+        width: 6
+        query: 'timeseries active = avg(http.server.active_requests), rollup: avg, filter: {SERVICE}'
+      - name: SLA Compliance % (root spans, <3s and not failed)
+        viz: singleValue
+        field: sla_compliance_pct
+        width: 6
+        query: |
+          fetch spans
+          | filter {SERVICE_EXPR} and request.is_root_span == true
+          | fieldsAdd meets_sla = if(request.is_failed == false and duration < 3s, 1, else: 0)
+          | summarize total = count(), compliant = sum(meets_sla)
+          | fieldsAdd sla_compliance_pct = (compliant * 100.0) / total
+
+  - title: "**Traffic** — shape of the load"
+    tiles:
+      - name: Requests by HTTP Status Code
+        viz: areaChart
+        width: 12
+        query: 'timeseries requests = sum(dynatrace.router.requests), by: {http.response.status_code}, filter: {SERVICE}'
+      - name: Operations by Type
+        viz: lineChart
+        width: 12
+        query: 'timeseries operations = sum(dynatrace.graphql.operations), by: {graphql.operation.type}, filter: {SERVICE}'
+      # No span carries payload size, so these stay on the metric — and therefore
+      # report avg/max rather than a percentile that would just be the average.
+      - name: Request Body Size — avg / max (bytes)
+        viz: lineChart
+        width: 12
+        query: |
+          timeseries {
+            avg_bytes = avg(http.server.request.body.size),
+            max_bytes = max(http.server.request.body.size)
+          }, filter: {SERVICE}
+      - name: Response Body Size — avg / max (bytes)
+        viz: lineChart
+        width: 12
+        query: |
+          timeseries {
+            avg_bytes = avg(http.server.response.body.size),
+            max_bytes = max(http.server.response.body.size)
+          }, filter: {SERVICE}
+
+  # PERCENTILES COME FROM SPANS, NOT FROM THE DURATION HISTOGRAMS.
+  #
+  # `timeseries percentile(metric, N)` requires a `rollup:`, and rollup collapses
+  # each time slot to one value *before* the percentile is taken — so p50, p95 and
+  # p99 all return that same rolled-up number. Verified against a live tenant:
+  # all three series came back byte-identical (min 0.001053, max 0.4753).
+  # It is not an approximation, it is the average wearing a percentile's label.
+  #
+  # Spans carry one `duration` per request, so percentile over spans is a real
+  # percentile. Same window, span-based: p50 1.2ms, p95 3.1ms, p99 9.1ms.
+  #
+  # Where no span carries the value (router overhead, payload sizes) the tile
+  # reports avg/max instead of a percentile it cannot honestly compute.
+  - title: "**Latency & overhead** — router or subgraphs?"
+    tiles:
+      - name: Router Latency — p50 / p95 / p99 (root spans)
+        viz: lineChart
+        width: 12
+        query: |
+          fetch spans
+          | filter {SERVICE_EXPR} and request.is_root_span == true
+          | makeTimeseries {
+              p50 = percentile(duration, 50),
+              p95 = percentile(duration, 95),
+              p99 = percentile(duration, 99)
+            }
+      - name: Router Overhead — avg / max (excludes downstream wait)
+        viz: lineChart
+        width: 12
+        query: |
+          timeseries {
+            avg_overhead = avg(apollo.router.overhead),
+            max_overhead = max(apollo.router.overhead)
+          }, filter: {SERVICE}
+      - name: Subgraph p95 Latency by Subgraph (spans)
+        viz: lineChart
+        width: 12
+        query: |
+          fetch spans
+          | filter {SERVICE_EXPR} and span.name == "subgraph"
+          | makeTimeseries p95 = percentile(duration, 95), by: {subgraph.name}
+      - name: Slowest Subgraphs (avg)
+        viz: table
+        width: 12
+        query: |
+          timeseries lat = avg(http.client.request.duration), by: {subgraph.name}, filter: {SERVICE}
+          | summarize avg_lat = avg(arrayAvg(lat)), by: {subgraph.name}
+          | sort avg_lat desc
+
+  - title: "**Errors** — where failures come from"
+    tiles:
+      - name: GraphQL Errors by Code
+        viz: lineChart
+        width: 12
+        query: 'timeseries errors = sum(apollo.router.graphql_error), by: {code}, filter: {SERVICE}'
+      - name: Subgraph Errors by Subgraph
+        viz: barChart
+        width: 12
+        query: 'timeseries errors = sum(dynatrace.subgraph.errors), by: {subgraph.name}, filter: {SERVICE}'
+      - name: 5xx over Time
+        viz: lineChart
+        width: 12
+        query: 'timeseries errors = sum(dynatrace.router.server.errors), filter: {SERVICE}'
+      - name: Requests by Status Code (table)
+        viz: table
+        width: 12
+        query: |
+          timeseries cnt = sum(dynatrace.router.requests), by: {http.response.status_code}, filter: {SERVICE}
+          | summarize total = sum(arraySum(cnt)), by: {http.response.status_code}
+          | sort total desc
+
+  # An empty tile should say why it is empty. Query planning always reports; the
+  # two cache tiles need router caching turned on, so they are labelled rather
+  # than left looking broken.
+  - title: |
+      **Cache & query planning** — the cache tiles stay empty unless router
+      caching is enabled (query-plan cache metrics need `supergraph.query_planning`
+      cache config; response cache needs entity caching: GraphOS Router
+      Enterprise + Redis)
+    tiles:
+      - name: Cache Hits vs Misses (requires query-plan caching)
+        viz: lineChart
+        width: 12
+        query: |
+          timeseries {
+            hits = sum(apollo.router.cache.hit.time.count),
+            misses = sum(apollo.router.cache.miss.time.count)
+          }, by: {kind}, filter: {SERVICE}
+      - name: Response Cache by Subgraph (requires entity caching)
+        viz: lineChart
+        width: 12
+        query: 'timeseries cache = sum(apollo.router.response.cache), by: {subgraph.name, cache.hit}, filter: {SERVICE}'
+      - name: Query Planning — p50 / p95 / p99 (spans)
+        viz: lineChart
+        width: 12
+        query: |
+          fetch spans
+          | filter {SERVICE_EXPR} and span.name == "query_planning"
+          | makeTimeseries {
+              p50 = percentile(duration, 50),
+              p95 = percentile(duration, 95),
+              p99 = percentile(duration, 99)
+            }
+      - name: Query Plans Generated
+        viz: lineChart
+        width: 12
+        query: 'timeseries plans = count(apollo.router.query_planning.plan.duration), filter: {SERVICE}'
+
+  - title: |
+      **Connector HTTP** — only populated when Apollo Connectors are in use
+    tiles:
+      # Span-based like the other percentiles. Unverified against real connector
+      # traffic — this demo runs no connectors — but it is the same shape as the
+      # subgraph tile, which is verified.
+      - name: Connector p95 Latency by Source (spans)
+        viz: lineChart
+        width: 12
+        query: |
+          fetch spans
+          | filter {SERVICE_EXPR} and isNotNull(connector.source.name)
+          | makeTimeseries p95 = percentile(duration, 95), by: {connector.source.name}
+      - name: Connector Request Rate by Source
+        viz: lineChart
+        width: 12
+        query: 'timeseries requests = count(http.client.request.duration), by: {connector.source.name}, filter: {SERVICE}'
+
+  - title: |
+      **Traces & Dependencies** — span- and log-based tiles: top operations,
+      dependency map, exemplars, and error logs (span/log-based, not metrics)
+    height: 3
+    tiles:
+      - name: Top GraphQL Operations (by p99)
+        viz: table
+        width: 12
+        query: |
+          fetch spans
+          | filter {SERVICE_EXPR} and request.is_root_span == true
+          | summarize {
+              requests = count(),
+              failed = countIf(request.is_failed == true),
+              p95 = percentile(duration, 95),
+              p99 = percentile(duration, 99)
+            }, by: {graphql.operation.name}
+          | fieldsAdd error_rate_pct = (failed * 100.0) / requests
+          | fields graphql.operation.name, requests, error_rate_pct, p95, p99
+          | sort p99 desc
+          | limit 20
+      - name: Recent Failed Requests (exemplars)
+        viz: table
+        width: 12
+        query: |
+          fetch spans
+          | filter {SERVICE_EXPR} and request.is_root_span == true and request.is_failed == true
+          | fields start_time, trace.id, graphql.operation.name, http.response.status_code, duration
+          | sort start_time desc
+          | limit 50
+      - name: Dependencies — Subgraphs & Connectors (by call volume)
+        viz: table
+        width: 12
+        query: |
+          fetch spans
+          | filter {SERVICE_EXPR} and span.kind == "client"
+          | fieldsAdd dependency = coalesce(subgraph.name, connector.source.name, server.address)
+          | filter isNotNull(dependency)
+          | summarize {
+              calls = count(),
+              avg_duration = avg(duration),
+              p99_duration = percentile(duration, 99)
+            }, by: {dependency}
+          | sort calls desc
+          | limit 20
+      # Stays empty on the direct topology: the router has no OTLP log exporter
+      # (DT022), so nothing ships its logs to Dynatrace. Populates once the
+      # router's stdout is forwarded — a collector `filelog` receiver, or any
+      # existing host log agent.
+      - name: Router Error Logs (requires log forwarding — see DT022)
+        viz: table
+        width: 12
+        query: |
+          fetch logs
+          | filter {SERVICE_EXPR} and loglevel == "ERROR"
+          | fields timestamp, content
+          | sort timestamp desc
+          | limit 50

@@ -1,0 +1,25 @@
+# Credentials — never commit. `.env.example` is the tracked template.
+.env
+.env.*
+!.env.example
+
+# Router binary (downloaded via router.apollo.dev)
+router
+bin/router
+
+# Demo/harness runtime state and logs
+demo/.run/
+*.log
+
+# Editor / assistant local settings
+.claude/
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+/tmp/

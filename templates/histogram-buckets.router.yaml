@@ -1,0 +1,112 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Histogram bucket configuration — required for latency numbers that match Studio
+#
+# THE PROBLEM
+#
+# The router's DEFAULT histogram bucket boundaries (seconds) are:
+#
+#     0.001, 0.005, 0.015, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 1.0, 5.0, 10.0
+#
+# Twelve boundaries, and look at the top end: 0.5 → 1.0 → 5.0 → 10.0. Any
+# percentile that falls between 1s and 5s is interpolated inside a bucket that is
+# 400% wide. A p95 of "2.1s" in that range is not a measurement, it is a guess
+# between 1.0 and 5.0.
+#
+# GraphOS Studio does not use these buckets. Apollo's usage-reporting histogram
+# is log-scale with hundreds of buckets, each roughly 10% wider than the last, so
+# Studio's percentile is accurate to a few percent across the whole range.
+#
+# Same requests, same router, two very different p95 values — and the cause is
+# bucket resolution, not temporality. (Temporality affects how counters
+# accumulate, not where a percentile lands inside a bucket.)
+#
+# THE FIX
+#
+# Give the histograms boundaries that are dense where your traffic actually
+# lives. Below is a log-ish ladder that stays within ~25% relative width up to
+# 10s, which brings OTel-derived percentiles close to Studio's.
+#
+# Tune it to your own latency distribution: you want several boundaries either
+# side of your p95 and p99. Keep the top boundary at or above your configured
+# request timeout, or every timeout lands in +Inf and the tail is invisible.
+#
+# Cost note: buckets are cheap compared to attributes. Each boundary adds one
+# series per attribute combination; each new attribute multiplies them. Going
+# from 12 to ~30 boundaries is a far smaller bill than enabling one
+# high-cardinality attribute.
+# ─────────────────────────────────────────────────────────────────────────────
+
+telemetry:
+  exporters:
+    metrics:
+      common:
+        # Applies to every histogram the router generates.
+        buckets:
+          - 0.005
+          - 0.01
+          - 0.025
+          - 0.05
+          - 0.075
+          - 0.1
+          - 0.15
+          - 0.2
+          - 0.25
+          - 0.3
+          - 0.4
+          - 0.5
+          - 0.6
+          - 0.75
+          - 0.9
+          - 1.0
+          - 1.25
+          - 1.5
+          - 2.0
+          - 2.5
+          - 3.0
+          - 4.0
+          - 5.0
+          - 6.5
+          - 8.0
+          - 10.0
+          - 15.0
+          - 20.0
+          - 30.0    # keep >= your request timeout
+
+        # Per-instrument override, when only the client-facing histogram needs
+        # the extra resolution and you would rather not pay for it everywhere.
+        # A views[] entry without an explicit `aggregation` keeps the
+        # instrument's native kind (router v2.16.0+).
+        views:
+          - name: http.server.request.duration
+            aggregation:
+              histogram:
+                buckets:
+                  - 0.005
+                  - 0.01
+                  - 0.025
+                  - 0.05
+                  - 0.075
+                  - 0.1
+                  - 0.15
+                  - 0.2
+                  - 0.25
+                  - 0.3
+                  - 0.4
+                  - 0.5
+                  - 0.6
+                  - 0.75
+                  - 0.9
+                  - 1.0
+                  - 1.25
+                  - 1.5
+                  - 2.0
+                  - 2.5
+                  - 3.0
+                  - 4.0
+                  - 5.0
+                  - 6.5
+                  - 8.0
+                  - 10.0
+                  - 15.0
+                  - 20.0
+                  - 30.0

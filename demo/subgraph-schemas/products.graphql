@@ -1,0 +1,16 @@
+extend schema
+  @link(url: "https://specs.apollo.dev/federation/v2.9", import: ["@key"])
+
+type Query {
+  products: [Product!]!
+  product(id: ID!): Product
+  """Always returns a GraphQL error (with HTTP 200) so the error instruments and
+  the otel.status_code span mapping have something to record."""
+  boom: String
+}
+
+type Product @key(fields: "id") {
+  id: ID!
+  title: String!
+  price: Float!
+}

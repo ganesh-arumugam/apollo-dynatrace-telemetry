@@ -1,0 +1,40 @@
+telemetry:
+  exporters:
+    metrics:
+      common:
+        buckets: [0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.5, 5.0, 10.0, 20.0]
+      otlp:
+        enabled: true
+        protocol: http
+        temporality: delta
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/metrics
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+    tracing:
+      common:
+        sampler: 0.05
+      otlp:
+        enabled: true
+        protocol: http
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/traces
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+    logging:
+      stdout:
+        enabled: true
+        format:
+          json:
+            display_trace_id: open_telemetry
+            display_span_id: true
+  instrumentation:
+    instruments:
+      default_requirement_level: required
+      router:
+        http.server.active_requests: true
+        acme.router.requests:
+          value: unit
+          type: counter
+          unit: "{request}"
+          description: "Router HTTP requests"

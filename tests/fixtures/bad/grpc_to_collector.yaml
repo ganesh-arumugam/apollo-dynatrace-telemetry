@@ -1,0 +1,11 @@
+telemetry:
+  exporters:
+    metrics:
+      otlp:
+        enabled: true
+        protocol: grpc
+        temporality: delta
+        endpoint: https://otel-gateway.internal:4317/api/v2/otlp/v1/metrics
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"

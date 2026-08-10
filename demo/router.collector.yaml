@@ -1,0 +1,124 @@
+# Demo router config — via an OTel Collector.
+#
+# Identical instrumentation to router.direct.yaml; the only difference is where
+# telemetry goes. The router knows nothing about Dynatrace here — the collector
+# (demo/otel-collector.yaml) holds the endpoint and token, and converts the
+# scraped cumulative metrics to delta.
+#
+# Validate:  python3 scripts/validate_dynatrace.py --mode collector demo/router.collector.yaml
+# Run:       ./demo/up.sh collector      (starts the collector with Docker)
+#
+# Env: OTEL_COLLECTOR_GRPC (default http://127.0.0.1:4317), DEPLOY_ENV
+
+supergraph:
+  listen: 127.0.0.1:4000
+  # sandbox (below) refuses to start unless introspection is on.
+  introspection: true
+health_check:
+  listen: 127.0.0.1:8088
+homepage:
+  enabled: false
+sandbox:
+  enabled: true
+include_subgraph_errors:
+  all: true
+
+telemetry:
+  exporters:
+    tracing:
+      common:
+        service_name: apollo-router
+        sampler: 1.0                 # demo only; 0.01-0.1 in production
+        parent_based_sampler: true
+        resource:
+          service.namespace: ${env.APOLLO_SERVICE_NAMESPACE:-supergraph}
+          deployment.environment: ${env.DEPLOY_ENV:-demo}
+      propagation:
+        trace_context: true
+      experimental_response_trace_id:
+        enabled: true
+        header_name: apollo-trace-id
+      otlp:
+        enabled: true
+        protocol: grpc               # fine to a collector; never to Dynatrace
+        endpoint: ${env.OTEL_COLLECTOR_GRPC:-http://127.0.0.1:4317}
+
+    metrics:
+      common:
+        service_name: apollo-router
+        resource:
+          service.namespace: ${env.APOLLO_SERVICE_NAMESPACE:-supergraph}
+          deployment.environment: ${env.DEPLOY_ENV:-demo}
+      # The collector scrapes this endpoint and converts cumulative -> delta.
+      # (Alternative: push OTLP with temporality: delta and drop the
+      # cumulativetodelta processor from the collector config.)
+      prometheus:
+        enabled: true
+        listen: 127.0.0.1:9091
+        path: /metrics
+
+    logging:
+      stdout:
+        enabled: true
+        format:
+          json:
+            display_trace_id: open_telemetry
+            display_span_id: true
+  instrumentation:
+    spans:
+      mode: spec_compliant
+      default_attribute_requirement_level: required
+      supergraph:
+        attributes:
+          graphql.operation.name: true
+          otel.status_code:
+            static: ERROR
+            condition:
+              eq:
+                - true
+                - on_graphql_error: true
+          error.message:
+            response_errors: $[0].message
+      subgraph:
+        attributes:
+          subgraph.name: true
+          otel.status_code:
+            static: ERROR
+            condition:
+              eq:
+                - true
+                - subgraph_on_graphql_error: true
+          error.message:
+            subgraph_response_errors: $[0].message
+
+    instruments:
+      default_requirement_level: required
+      router:
+        http.server.active_requests: true
+        http.server.request.duration: true
+        apollo.router.overhead: true
+        dynatrace.router.requests:
+          value: unit
+          type: counter
+          unit: "{request}"
+          description: "Router HTTP requests, by response status code"
+          attributes:
+            http.response.status_code: true
+      supergraph:
+        dynatrace.graphql.operations:
+          value: unit
+          type: counter
+          unit: "{operation}"
+          description: "GraphQL operations executed, by operation type"
+          attributes:
+            graphql.operation.type: true
+      subgraph:
+        http.client.request.duration:
+          attributes:
+            subgraph.name: true
+
+    events:
+      router:
+        request: info
+        response: "off"
+        error: error

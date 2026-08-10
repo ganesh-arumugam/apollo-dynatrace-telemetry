@@ -1,0 +1,62 @@
+# Router config used by the harness. Identical in shape to the production
+# template — same protocol, temporality, endpoint suffix, and Api-Token header —
+# but pointed at the local mock Dynatrace OTLP receiver.
+supergraph:
+  listen: 127.0.0.1:4010
+health_check:
+  listen: 127.0.0.1:8098
+homepage:
+  enabled: false
+sandbox:
+  enabled: false
+
+telemetry:
+  exporters:
+    metrics:
+      common:
+        service_name: apollo-router
+      otlp:
+        enabled: true
+        protocol: http
+        temporality: delta
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/metrics
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+        batch_processor:
+          scheduled_delay: 1s
+    tracing:
+      common:
+        sampler: 1.0
+      otlp:
+        enabled: true
+        protocol: http
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/traces
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+        batch_processor:
+          scheduled_delay: 1s
+    # stdout only — the router has no OTLP log exporter (DT022). A bare `logging:`
+    # key parses as null and the router rejects it, so the block must be populated
+    # or absent entirely.
+    logging:
+      stdout:
+        enabled: true
+        format:
+          json:
+            display_trace_id: open_telemetry
+            display_span_id: true
+  instrumentation:
+    instruments:
+      default_requirement_level: required
+      router:
+        http.server.active_requests: true
+        http.server.request.duration: true
+        dynatrace.router.requests:
+          value: unit
+          type: counter
+          unit: "{request}"
+          description: "Router HTTP requests, by response status code"
+          attributes:
+            http.response.status_code: true

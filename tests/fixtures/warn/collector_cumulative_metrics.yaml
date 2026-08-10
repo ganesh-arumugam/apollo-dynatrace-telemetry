@@ -1,0 +1,7 @@
+telemetry:
+  exporters:
+    metrics:
+      otlp:
+        enabled: true
+        protocol: grpc
+        endpoint: http://otel-collector:4317

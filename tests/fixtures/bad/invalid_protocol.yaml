@@ -1,0 +1,11 @@
+telemetry:
+  exporters:
+    metrics:
+      otlp:
+        enabled: true
+        protocol: thrift
+        temporality: delta
+        endpoint: https://abc.live.dynatrace.com:443/api/v2/otlp/v1/metrics
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"

@@ -1,0 +1,9 @@
+telemetry:
+  instrumentation:
+    instruments:
+      router:
+        acme.router.requests:
+          value: unit
+          type: gauge
+          unit: "{request}"
+          description: "gauge is not a supported instrument kind"

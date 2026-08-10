@@ -1,0 +1,9 @@
+telemetry:
+  instrumentation:
+    instruments:
+      router:
+        http.server.custom.thing:
+          value: unit
+          type: counter
+          unit: "{request}"
+          description: "collides with the standard http.* namespace"

@@ -1,0 +1,36 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pyyaml
+      - name: Fixtures are up to date with make_fixtures.py
+        run: |
+          python3 tests/make_fixtures.py
+          git diff --exit-code tests/fixtures
+      - name: Dashboard JSON is in sync with tiles.yaml
+        run: python3 scripts/build_dashboard.py --check
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -p "test_*.py" -v
+      - name: Shell scripts parse
+        run: |
+          for f in run-tests.sh harness/run_harness.sh scripts/*.sh demo/*.sh; do
+            bash -n "$f"
+          done
+      - name: Python scripts compile
+        run: python3 -m compileall -q scripts demo harness tests
+      - name: Download Apollo Router
+        run: |
+          curl -sSL https://router.apollo.dev/download/nix/latest | sh
+          ./router --version
+      - name: Harness (all three layers)
+        run: ROUTER_BIN=./router ./harness/run_harness.sh

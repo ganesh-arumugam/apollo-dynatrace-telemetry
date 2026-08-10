@@ -1,0 +1,72 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Router logs → Dynatrace
+#
+# READ THIS FIRST: the router has **no OTLP log exporter**. In the router config
+# schema, `telemetry.exporters.logging` accepts exactly two keys — `common` and
+# `stdout` — with `additionalProperties: false`. Writing
+#
+#     telemetry:
+#       exporters:
+#         logging:
+#           otlp: ...          # <- does not exist
+#
+# makes the router fail config validation at startup. (Rule DT022 catches it.)
+#
+# So logs reach Dynatrace one way: the router writes structured JSON to stdout,
+# and something else ships it. Two options:
+#
+#   A. OTel Collector with a `filelog` receiver tailing the router's stdout,
+#      lifting trace_id/span_id onto each record so Dynatrace links logs to
+#      spans (the "Logs" tab on a trace). See
+#      templates/collector/otel-collector-dynatrace.yml.
+#   B. Whatever already ships container stdout in your platform (Fluent Bit, the
+#      Dynatrace OneAgent log module, a k8s log forwarder). Nothing about the
+#      router changes; just keep the JSON format below.
+#
+# The part that matters either way is `display_trace_id` — without it the log
+# line carries no trace id and cannot be correlated with the span.
+# ─────────────────────────────────────────────────────────────────────────────
+
+telemetry:
+  exporters:
+    logging:
+      common:
+        service_name: apollo-router
+        resource:
+          service.namespace: ${env.APOLLO_SERVICE_NAMESPACE:-supergraph}
+          deployment.environment: ${env.DEPLOY_ENV:-dev}
+      stdout:
+        enabled: true
+        format:
+          json:
+            # The correlation key. `open_telemetry` emits the W3C trace id that
+            # Dynatrace searches on (`fetch logs | filter trace_id == "..."`).
+            display_trace_id: open_telemetry
+            display_span_id: true
+            display_timestamp: true
+            display_level: true
+            # Keep lines lean in production — the span list is a debugging aid.
+            display_current_span: false
+            display_span_list: false
+        # Protects against a log flood taking the process down with it. Note this
+        # rate-limits stdout only; it has no effect on trace or metric export.
+        rate_limit:
+          capacity: 10
+          interval: 1s
+
+  instrumentation:
+    # Log records come from *events*, not from the exporter. With no events
+    # configured the router logs almost nothing per request, and the Logs tab on
+    # a Dynatrace trace stays empty.
+    #
+    # `response: off` is deliberate: response events dump the full body — volume
+    # you pay for, and a PII risk. Turn them on for a debugging window only.
+    events:
+      router:
+        request: info
+        response: "off"
+        error: error
+      subgraph:
+        request: info
+        response: "off"
+        error: error

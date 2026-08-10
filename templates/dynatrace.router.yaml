@@ -1,0 +1,82 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Apollo Router → Dynatrace: complete telemetry template (all three signals)
+#
+# Verified against:
+#   - Apollo docs: apm-guides/dynatrace/dynatrace-metrics  (temporality: delta,
+#     protocol: http, /api/v2/otlp/v1/metrics, explicit :443, Api-Token header)
+#   - Apollo docs: apm-guides/dynatrace/dynatrace-traces
+#   - Apollo docs: enabling-telemetry/instruments
+#
+# Required env vars (see .env.example):
+#   DYNATRACE_ENV_URL    e.g. https://abc12345.live.dynatrace.com:443
+#   DYNATRACE_API_TOKEN  dt0c01.XXXX  (scopes below)
+#
+# Token scopes: openTelemetryTrace.ingest, metrics.ingest, logs.ingest
+#
+# Router preflight: OTEL_EXPORTER_OTLP_ENDPOINT / _TRACES_ / _METRICS_ must be
+# UNSET. v2.12 and earlier silently override this config; v2.13+ refuses to boot.
+# ─────────────────────────────────────────────────────────────────────────────
+
+telemetry:
+  exporters:
+    # ── Metrics ──────────────────────────────────────────────────────────────
+    # Dynatrace rejects cumulative temporality. `delta` is mandatory, not a
+    # preference: with cumulative, counters silently never appear in Grail.
+    metrics:
+      common:
+        service_name: apollo-router
+        resource:
+          # Becomes dt.entity attributes / filterable dimensions in Dynatrace.
+          service.namespace: ${env.APOLLO_SERVICE_NAMESPACE:-supergraph}
+          deployment.environment: ${env.DEPLOY_ENV:-dev}
+      otlp:
+        enabled: true
+        protocol: http            # gRPC is NOT supported by Dynatrace OTLP
+        temporality: delta        # REQUIRED for Dynatrace
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/metrics
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+        batch_processor:
+          scheduled_delay: 5s
+          max_export_batch_size: 512
+          max_concurrent_exports: 1
+          max_export_timeout: 30s
+          max_queue_size: 2048
+
+    # ── Traces ───────────────────────────────────────────────────────────────
+    tracing:
+      common:
+        service_name: apollo-router
+        # Sample well below 1.0 in production. 1.0 on a busy router will get you
+        # rate-limited by Dynatrace and will dominate your DDU spend.
+        sampler: 0.05
+        resource:
+          service.namespace: ${env.APOLLO_SERVICE_NAMESPACE:-supergraph}
+          deployment.environment: ${env.DEPLOY_ENV:-dev}
+      otlp:
+        enabled: true
+        protocol: http
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/traces
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+        batch_processor:
+          scheduled_delay: 5s
+          max_export_batch_size: 512
+          max_concurrent_exports: 1
+          max_export_timeout: 30s
+          max_queue_size: 2048
+
+    # ── Logs ─────────────────────────────────────────────────────────────────
+    logging:
+      stdout:
+        enabled: true
+        format: json
+  instrumentation:
+    # Instruments live in their own file so they can be reviewed/owned
+    # separately from credentials and endpoints. Paste the block from
+    # templates/instruments.router.yaml here, or merge both files at deploy time
+    # with scripts/render.sh.
+    instruments:
+      default_requirement_level: required

@@ -1,0 +1,123 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Prometheus and Dynatrace at the same time
+#
+# Yes, this works. `telemetry.exporters.metrics.prometheus` and
+# `telemetry.exporters.metrics.otlp` are sibling settings, and enabling both is
+# supported: the router records each measurement once and hands it to every
+# enabled exporter.
+#
+#   Prometheus  scrape  ->  router :9090/metrics   (your Prometheus pulls)
+#   Dynatrace   push    ->  OTLP/HTTP, delta       (the router pushes)
+#
+# A useful thing to notice: the same counter is cumulative on the Prometheus
+# endpoint and delta over OTLP. Both are correct. Temporality is how a value is
+# transported, not what was measured — which is also why it can't explain a
+# difference in a latency percentile.
+#
+# What is shared vs per-exporter:
+#
+#   shared      instruments, attributes, resource attributes, `common.buckets`,
+#               `common.views`  -> change these and BOTH backends see it
+#   per-export  endpoint, protocol, temporality, batch settings, listen address
+#
+# Docs: telemetry-pipelines/metrics-exporters/overview
+# ─────────────────────────────────────────────────────────────────────────────
+
+telemetry:
+  exporters:
+    metrics:
+      common:
+        service_name: apollo-router
+        resource:
+          service.namespace: ${env.APOLLO_SERVICE_NAMESPACE:-supergraph}
+          deployment.environment: ${env.DEPLOY_ENV:-dev}
+
+        # Applies to both exporters. Bucket boundaries decide how accurate a
+        # percentile can be, so both backends benefit from the same change.
+        # See templates/histogram-buckets.router.yaml for the reasoning.
+        buckets:
+          - 0.005
+          - 0.01
+          - 0.025
+          - 0.05
+          - 0.075
+          - 0.1
+          - 0.15
+          - 0.2
+          - 0.25
+          - 0.3
+          - 0.4
+          - 0.5
+          - 0.6
+          - 0.75
+          - 0.9
+          - 1.0
+          - 1.25
+          - 1.5
+          - 2.0
+          - 2.5
+          - 3.0
+          - 4.0
+          - 5.0
+          - 6.5
+          - 8.0
+          - 10.0
+          - 15.0
+          - 20.0
+          - 30.0
+
+      # ── Prometheus: your existing scrape keeps working ─────────────────────
+      # Pull model, so nothing leaves the pod unless Prometheus asks. Counters
+      # appear cumulative here, which is what Prometheus expects.
+      prometheus:
+        enabled: true
+        listen: 0.0.0.0:9090
+        path: /metrics
+
+      # ── Dynatrace: push over OTLP ─────────────────────────────────────────
+      otlp:
+        enabled: true
+        protocol: http           # Dynatrace ingests OTLP over HTTP
+        temporality: delta       # Dynatrace stores delta metrics
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/metrics
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+        batch_processor:
+          scheduled_delay: 5s
+          max_export_batch_size: 512
+          max_concurrent_exports: 1
+          max_export_timeout: 30s
+          max_queue_size: 2048
+
+    # Traces have the same freedom: one OTLP tracing exporter can point at
+    # Dynatrace while GraphOS reporting continues independently. If you want
+    # traces in two backends as well, send them to an OTel Collector and fan out
+    # there — see templates/collector/.
+    tracing:
+      common:
+        service_name: apollo-router
+        sampler: 0.05
+        parent_based_sampler: true
+        resource:
+          service.namespace: ${env.APOLLO_SERVICE_NAMESPACE:-supergraph}
+          deployment.environment: ${env.DEPLOY_ENV:-dev}
+      otlp:
+        enabled: true
+        protocol: http
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/traces
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+
+    logging:
+      stdout:
+        enabled: true
+        format:
+          json:
+            display_trace_id: open_telemetry
+            display_span_id: true
+
+  instrumentation:
+    instruments:
+      default_requirement_level: required

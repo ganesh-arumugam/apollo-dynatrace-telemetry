@@ -1,0 +1,80 @@
+# Demo collector: router -> collector -> Dynatrace. Dynatrace only, no side
+# destinations - if you want a local Jaeger alongside, add it yourself.
+#
+# The metrics pipeline is the part that matters: a Prometheus scrape is
+# CUMULATIVE and Dynatrace accepts DELTA only, so without cumulativetodelta the
+# counters are accepted with a 2xx and then dropped.
+#
+# Env: DT_OTLP_ENDPOINT (no /v1/... suffix), DT_API_TOKEN, ROUTER_METRICS_TARGET
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: apollo-router
+          scrape_interval: 10s
+          static_configs:
+            - targets: ["${env:ROUTER_METRICS_TARGET}"]
+
+processors:
+  batch: {}
+  cumulativetodelta: {}
+  batch/metrics:
+    send_batch_size: 500
+    send_batch_max_size: 1000
+    timeout: 10s
+  resource/identity:
+    attributes:
+      - key: service.name
+        value: apollo-router
+        action: insert
+      - key: service.namespace
+        value: ${env:APOLLO_SERVICE_NAMESPACE}
+        action: insert
+      - key: deployment.environment
+        value: ${env:DEPLOY_ENV}
+        action: insert
+  attributes/trim:
+    actions:
+      - { key: http.request.body, action: delete }
+      - { key: http.request.headers, action: delete }
+      - { key: http.response.body, action: delete }
+      - { key: http.response.headers, action: delete }
+
+exporters:
+  otlphttp/dynatrace:
+    # No /v1/<signal> suffix - the exporter appends it. Leaving it on gives 404s.
+    endpoint: ${env:DT_OTLP_ENDPOINT}
+    headers:
+      Authorization: "Api-Token ${env:DT_API_TOKEN}"
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+
+service:
+  # Exposes otelcol_receiver_accepted_* / otelcol_exporter_send_failed on :8888,
+  # which is what scripts/verify_ingest.sh reads.
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888
+    logs:
+      level: info
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource/identity, batch]
+      exporters: [otlphttp/dynatrace]
+    metrics:
+      receivers: [prometheus]
+      processors: [cumulativetodelta, resource/identity, batch/metrics]
+      exporters: [otlphttp/dynatrace]
+    logs:
+      receivers: [otlp]
+      processors: [resource/identity, attributes/trim, batch]
+      exporters: [otlphttp/dynatrace]

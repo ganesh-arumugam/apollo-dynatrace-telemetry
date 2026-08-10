@@ -1,0 +1,7 @@
+telemetry:
+  instrumentation:
+    instruments:
+      router:
+        http.server.request.duration:
+          attributes:
+            graphql.document: true

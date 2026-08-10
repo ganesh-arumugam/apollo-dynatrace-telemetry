@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Apollo Router → Dynatrace via ActiveGate or Dynatrace Managed
+#
+# The three endpoint shapes, which differ only in host and path prefix:
+#
+#   SaaS        https://<env-id>.live.dynatrace.com:443/api/v2/otlp/v1/<signal>
+#   Managed     https://<your-domain>:443/e/<env-id>/api/v2/otlp/v1/<signal>
+#   ActiveGate  https://<activegate-host>:9999/e/<env-id>/api/v2/otlp/v1/<signal>
+#
+# Use ActiveGate when the router has no direct route to the internet — it plays a
+# similar role to a local agent in other stacks. Everything else matches the
+# direct template: HTTP transport, delta temporality, Api-Token header.
+#
+# ActiveGate commonly presents a private CA certificate. If the router logs a TLS
+# failure, point it at the CA bundle rather than disabling verification:
+#   SSL_CERT_FILE=/etc/ssl/certs/activegate-ca.pem
+#
+# Env: DYNATRACE_OTLP_BASE, DYNATRACE_API_TOKEN
+#   Managed:    DYNATRACE_OTLP_BASE=https://dt.example.com:443/e/abc12345
+#   ActiveGate: DYNATRACE_OTLP_BASE=https://ag.internal:9999/e/abc12345
+# ─────────────────────────────────────────────────────────────────────────────
+
+telemetry:
+  exporters:
+    metrics:
+      common:
+        service_name: apollo-router
+        resource:
+          service.namespace: ${env.APOLLO_SERVICE_NAMESPACE:-supergraph}
+          deployment.environment: ${env.DEPLOY_ENV:-dev}
+      otlp:
+        enabled: true
+        protocol: http
+        temporality: delta
+        endpoint: ${env.DYNATRACE_OTLP_BASE}/api/v2/otlp/v1/metrics
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+        batch_processor:
+          scheduled_delay: 5s
+          max_export_batch_size: 512
+          max_concurrent_exports: 1
+          max_export_timeout: 30s
+          max_queue_size: 2048
+
+    tracing:
+      common:
+        service_name: apollo-router
+        sampler: 0.05
+        parent_based_sampler: true
+        resource:
+          service.namespace: ${env.APOLLO_SERVICE_NAMESPACE:-supergraph}
+          deployment.environment: ${env.DEPLOY_ENV:-dev}
+      otlp:
+        enabled: true
+        protocol: http
+        endpoint: ${env.DYNATRACE_OTLP_BASE}/api/v2/otlp/v1/traces
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+
+    logging:
+      stdout:
+        enabled: true
+        format: json
+  instrumentation:
+    instruments:
+      default_requirement_level: required

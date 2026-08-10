@@ -1,0 +1,13 @@
+telemetry:
+  instrumentation:
+    instruments:
+      router:
+        acme.router.server.errors:
+          value: unit
+          type: counter
+          unit: "{error}"
+          description: "5xx responses"
+          condition:
+            gte:
+              - response_status: code
+              - 500

@@ -1,0 +1,153 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# OTel Collector fan-out: one router export, two metrics backends
+#
+#   Router ──OTLP──▶ Collector ─┬─▶ Prometheus  (scrape endpoint on the collector)
+#                               └─▶ Dynatrace   (OTLP/HTTP, delta)
+#
+# The router exports once and doesn't know about either backend. Adding,
+# removing, or swapping a destination is a collector change.
+#
+# THE KEY DETAIL: temporality is per-branch, so the split has to happen here.
+#
+#   Prometheus expects CUMULATIVE counters (a scrape reads a running total).
+#   Dynatrace stores  DELTA     counters (each export covers one interval).
+#
+# The router can only pick one temporality for its OTLP exporter, so it sends
+# cumulative (the OpenTelemetry default) and this config converts on the
+# Dynatrace branch only. Two pipelines read the same receiver — that is the
+# standard way to apply different processing to the same data.
+#
+# Why this direction: `cumulativetodelta` is a long-standing, widely used
+# processor. The reverse (`deltatocumulative`) exists, but is newer — check its
+# stability level for your collector version before depending on it.
+#
+# Env: DT_OTLP_ENDPOINT (no /v1/... suffix), DT_API_TOKEN,
+#      APOLLO_SERVICE_NAMESPACE, DEPLOY_ENV
+#
+# Router side: templates/collector/router-to-collector.router.yaml, with the
+# metrics OTLP exporter left at the default cumulative temporality.
+# ─────────────────────────────────────────────────────────────────────────────
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Only needed if you also tail the router's stdout for logs. Drop this block
+  # if your platform already ships container logs.
+  filelog:
+    include: [/var/log/apollo-router/router.log]
+    start_at: end
+    operators:
+      - type: filter
+        expr: 'body matches "^[^{]"'
+      - type: json_parser
+        parse_to: attributes
+        on_error: drop_quiet
+        timestamp:
+          parse_from: attributes.timestamp
+          layout_type: gotime
+          layout: "2006-01-02T15:04:05.999999999Z07:00"
+        severity:
+          parse_from: attributes.level
+        trace:
+          trace_id:
+            parse_from: attributes.trace_id
+          span_id:
+            parse_from: attributes.span_id
+
+processors:
+  batch: {}
+
+  # Applied on the Dynatrace branch only.
+  cumulativetodelta: {}
+
+  batch/metrics:
+    send_batch_size: 500
+    send_batch_max_size: 1000
+    timeout: 10s
+
+  batch/logs:
+    send_batch_size: 200
+    send_batch_max_size: 400
+    timeout: 2s
+
+  resource/identity:
+    attributes:
+      - key: service.namespace
+        value: ${env:APOLLO_SERVICE_NAMESPACE}
+        action: insert
+      - key: deployment.environment
+        value: ${env:DEPLOY_ENV}
+        action: insert
+
+  attributes/trim:
+    actions:
+      - { key: http.request.body, action: delete }
+      - { key: http.request.headers, action: delete }
+      - { key: http.response.body, action: delete }
+      - { key: http.response.headers, action: delete }
+
+exporters:
+  # ── Prometheus branch ───────────────────────────────────────────────────────
+  # Exposes a scrape endpoint ON THE COLLECTOR. Point your Prometheus job at
+  # <collector>:8889/metrics instead of at the router. Metric names are
+  # normalised to Prometheus convention (dots -> underscores, unit suffixes).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      # Copies resource attributes (service.name, deployment.environment) onto
+      # each series as labels. Without it they only appear on target_info.
+      enabled: true
+
+  # If your Prometheus accepts remote write (or you run Mimir/Thanos), swap the
+  # exporter above for this one and push instead of being scraped:
+  #
+  # prometheusremotewrite:
+  #   endpoint: ${env:PROM_REMOTE_WRITE_URL}
+  #   resource_to_telemetry_conversion:
+  #     enabled: true
+
+  # ── Dynatrace branch ────────────────────────────────────────────────────────
+  otlphttp/dynatrace:
+    endpoint: ${env:DT_OTLP_ENDPOINT}
+    headers:
+      Authorization: "Api-Token ${env:DT_API_TOKEN}"
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+
+service:
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888   # collector self-metrics; verify_ingest.sh reads these
+    logs:
+      level: info
+
+  pipelines:
+    # Same receiver, two metrics pipelines, different processing per branch.
+    metrics/prometheus:
+      receivers: [otlp]
+      processors: [resource/identity, batch/metrics]
+      exporters: [prometheus]
+
+    metrics/dynatrace:
+      receivers: [otlp]
+      processors: [cumulativetodelta, resource/identity, batch/metrics]
+      exporters: [otlphttp/dynatrace]
+
+    # Traces: Prometheus doesn't take traces, so this branch is Dynatrace only.
+    # Add a second exporter here if you also send traces elsewhere.
+    traces:
+      receivers: [otlp]
+      processors: [resource/identity, batch]
+      exporters: [otlphttp/dynatrace]
+
+    logs:
+      receivers: [filelog]
+      processors: [resource/identity, attributes/trim, batch/logs]
+      exporters: [otlphttp/dynatrace]

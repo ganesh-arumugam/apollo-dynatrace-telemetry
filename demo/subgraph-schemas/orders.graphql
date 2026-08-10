@@ -1,0 +1,18 @@
+extend schema
+  @link(url: "https://specs.apollo.dev/federation/v2.9", import: ["@key", "@external"])
+
+type Query {
+  orders: [Order!]!
+}
+
+type Order {
+  id: ID!
+  total: Float!
+  """Product stubs resolved from the products subgraph via an entity fetch -
+  that fetch is the span worth looking at in Dynatrace."""
+  items: [Product!]!
+}
+
+type Product @key(fields: "id", resolvable: false) {
+  id: ID!
+}

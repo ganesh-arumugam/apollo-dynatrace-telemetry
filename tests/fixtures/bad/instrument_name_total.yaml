@@ -1,0 +1,9 @@
+telemetry:
+  instrumentation:
+    instruments:
+      router:
+        acme.router.requests_total:
+          value: unit
+          type: counter
+          unit: "{request}"
+          description: "has a _total suffix"

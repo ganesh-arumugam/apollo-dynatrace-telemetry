@@ -1,0 +1,109 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Apollo Router → Dynatrace: metrics + instruments template
+#
+# This is the "what do I actually measure" half of the template. The exporter
+# (templates/dynatrace.router.yaml) decides WHERE data goes; instruments decide
+# WHAT is produced. Every instrument below has a matching DQL query in
+# dashboards/dql-queries.md, so the dashboard and the config cannot drift.
+#
+# Cardinality warning: every attribute you turn on multiplies series count, and
+# Dynatrace bills on ingested data points. Attributes marked (HIGH CARD) should
+# stay off in production unless you have a specific investigation running.
+# ─────────────────────────────────────────────────────────────────────────────
+
+telemetry:
+  instrumentation:
+    instruments:
+      # `required` (default) attaches only OTel-required attributes.
+      # `recommended` pulls in development-status GraphQL conventions such as
+      # graphql.document — high cardinality and can carry PII. Keep `required`.
+      default_requirement_level: required
+
+      # ── Router service ────────────────────────────────────────────────────
+      router:
+        # OTel standard instruments (on by default at `required`).
+        http.server.active_requests: true
+        http.server.request.duration:
+          attributes:
+            http.response.status_code: true
+            graphql.operation.name: false   # (HIGH CARD) enable only to debug
+        http.server.request.body.size: true
+        http.server.response.body.size: true
+
+        # Apollo standard instrument: time the router itself spent working,
+        # excluding waiting on subgraphs/connectors. This is the metric to use
+        # when a customer asks "is the router the bottleneck or my subgraphs?"
+        apollo.router.overhead: true
+
+        # Custom: request count by status class. Cheap, and it is the counter to
+        # reconcile against GraphOS operation counts when the two disagree —
+        # apollo.router.operations.* counts operations, this counts HTTP
+        # requests, and batched/subscription traffic makes them diverge.
+        dynatrace.router.requests:
+          value: unit
+          type: counter
+          unit: "{request}"
+          description: "Router HTTP requests, by response status code"
+          attributes:
+            http.response.status_code: true
+
+        # Custom: 5xx-only counter so an alert can key off one series instead of
+        # filtering a histogram.
+        dynatrace.router.server.errors:
+          value: unit
+          type: counter
+          unit: "{error}"
+          description: "Router responses with a 5xx status"
+          # `gte` is not a router operator (eq/gt/lt/exists/all/any/not only), and
+          # an unknown one stops the router from starting. >= 500 is `gt` 499.
+          condition:
+            gt:
+              - response_status: code
+              - 499
+
+      # ── Supergraph service ────────────────────────────────────────────────
+      supergraph:
+        dynatrace.graphql.operations:
+          value: unit
+          type: counter
+          unit: "{operation}"
+          description: "GraphQL operations executed, by operation type"
+          attributes:
+            graphql.operation.type: true
+            graphql.operation.name: false   # (HIGH CARD)
+
+      # ── Subgraph service ──────────────────────────────────────────────────
+      subgraph:
+        http.client.request.duration:
+          attributes:
+            subgraph.name: true
+        http.client.request.body.size: true
+        http.client.response.body.size: true
+
+        # Custom: subgraph errors attributed to the subgraph that produced them.
+        # Without subgraph.name this metric is hard to act on in a
+        # multi-subgraph graph.
+        dynatrace.subgraph.errors:
+          value: unit
+          type: counter
+          unit: "{error}"
+          description: "Subgraph responses that carried GraphQL errors"
+          condition:
+            eq:
+              - true
+              - subgraph_on_graphql_error: true
+          attributes:
+            subgraph.name: true
+
+      # ── Connector HTTP requests (omit if not using Apollo Connectors) ──────
+      connector:
+        http.client.request.duration:
+          attributes:
+            connector.source.name: true
+
+      # ── Cache (response caching / entity caching) ─────────────────────────
+      cache:
+        apollo.router.response.cache:
+          attributes:
+            entity.type: true
+            subgraph.name: true

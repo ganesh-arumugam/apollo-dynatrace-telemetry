@@ -1,0 +1,98 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Apollo Router → Dynatrace: span instrumentation
+#
+# The Dynatrace equivalent of Apollo's "Router Instrumentation for Datadog"
+# guide. That guide tunes `operation.name` / `resource.name`, which is how
+# Datadog APM groups spans. Dynatrace groups by service and span name and drives
+# failure detection from span status, so the same goal needs a different config.
+#
+# The most important line in this file is `otel.status_code: ERROR` on a GraphQL
+# error. GraphQL returns errors with **HTTP 200**, so without this Dynatrace sees
+# a successful request and the failure rate stays flat while clients are getting
+# errors.
+#
+# Pair with templates/instruments.router.yaml (metrics) and one of the exporter
+# templates. Keep the trace sampler fractional: spans are the expensive signal.
+# ─────────────────────────────────────────────────────────────────────────────
+
+telemetry:
+  instrumentation:
+    spans:
+      # OpenTelemetry-standard span naming and attributes. `deprecated` is the
+      # legacy Router v1 shape; its span names group less cleanly in Dynatrace.
+      mode: spec_compliant
+
+      # `recommended` adds OTel development-status attributes, including
+      # graphql.document. On spans that is defensible when sampling is low and
+      # the graph carries no sensitive arguments — on metrics it never is. Drop
+      # to `required` if operations can contain PII.
+      default_attribute_requirement_level: required
+
+      router:
+        attributes:
+          # Debug aid: what trace context did the caller actually send? Proves
+          # whether the router originated the trace or continued the client's,
+          # which is the usual cause of "my trace is split in Dynatrace".
+          debug.incoming.traceparent:
+            request_header: traceparent
+          debug.router.trace_id:
+            trace_id: open_telemetry
+
+      supergraph:
+        attributes:
+          # Groups traces by operation in Dynatrace's trace search. Watch
+          # cardinality: unbounded/anonymous operation names bloat Dynatrace's
+          # request naming, the same way they affect Datadog's resource.name.
+          graphql.operation.name: true
+
+          # ── GraphQL error detection (the important part) ──────────────────
+          otel.status_code:
+            static: ERROR
+            condition:
+              eq:
+                - true
+                - on_graphql_error: true
+          otel.status_description:
+            response_errors: $[0].extensions.code
+          error.message:
+            response_errors: $[0].message
+          graphql.errors:
+            on_graphql_error: true
+
+      subgraph:
+        attributes:
+          subgraph.name: true
+          # Attribute the failure to the subgraph that produced it, so
+          # Dynatrace's failure analysis points at the right service.
+          otel.status_code:
+            static: ERROR
+            condition:
+              eq:
+                - true
+                - subgraph_on_graphql_error: true
+          error.message:
+            subgraph_response_errors: $[0].message
+          graphql.errors:
+            subgraph_on_graphql_error: true
+
+      # Connector spans: the router makes the REST call itself, so without these
+      # the outbound HTTP hop is invisible in the trace waterfall.
+      connector:
+        attributes:
+          subgraph.name: true
+          connector.source.name: true
+          connector.http.method: true
+          connector.url.template: true
+
+    events:
+      # One log line per request carrying the trace id. Required for the
+      # "Logs" tab on a Dynatrace trace to have anything in it — but response
+      # events dump full bodies, so keep them off outside debugging.
+      router:
+        request: info
+        response: "off"
+        error: error
+      subgraph:
+        request: info
+        response: "off"
+        error: error

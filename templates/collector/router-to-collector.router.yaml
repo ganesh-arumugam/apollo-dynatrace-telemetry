@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Router config for the COLLECTOR topology.
+#
+# The router knows nothing about Dynatrace here — that is the point. Swapping or
+# adding a backend becomes a collector change, not a router redeploy. This is the
+# shape proven in production, plus the metrics half.
+#
+# Pair with templates/collector/otel-collector-dynatrace.yml.
+#
+# Env: OTEL_COLLECTOR_GRPC (e.g. http://otel-collector:4317), DEPLOY_ENV
+#
+# Validate with:  python3 scripts/validate_dynatrace.py --mode collector <file>
+# ─────────────────────────────────────────────────────────────────────────────
+
+telemetry:
+  exporters:
+    tracing:
+      common:
+        service_name: apollo-router
+        resource:
+          service.namespace: supergraph
+          deployment.environment: ${env.DEPLOY_ENV:-dev}
+        # Fractional in production; raise temporarily while investigating.
+        sampler: 0.1
+        # true = honor an upstream decision (OneAgent, gateway, calling service)
+        # so distributed traces stay in one piece.
+        parent_based_sampler: true
+      propagation:
+        trace_context: true
+      # Hand the trace id back to the client so a caller can paste it into
+      # Dynatrace. Note: Dynatrace searches on trace_id, not the full traceparent.
+      experimental_response_trace_id:
+        enabled: true
+        header_name: apollo-trace-id
+      otlp:
+        enabled: true
+        endpoint: ${env.OTEL_COLLECTOR_GRPC}
+        protocol: grpc          # fine to the collector; never to Dynatrace
+
+    metrics:
+      common:
+        service_name: apollo-router
+        resource:
+          service.namespace: supergraph
+          deployment.environment: ${env.DEPLOY_ENV:-dev}
+      # Option (a): let the collector scrape this endpoint, then convert
+      # cumulative -> delta there (cumulativetodelta). Router config stays
+      # identical whether or not Dynatrace is in the picture.
+      prometheus:
+        enabled: true
+        listen: 0.0.0.0:9091
+        path: /metrics
+      # Option (b): push OTLP metrics to the collector instead. If you use this,
+      # keep temporality: delta so nothing downstream has to convert.
+      # otlp:
+      #   enabled: true
+      #   endpoint: ${env.OTEL_COLLECTOR_GRPC}
+      #   protocol: grpc
+      #   temporality: delta
+
+    logging:
+      stdout:
+        enabled: true
+        format:
+          json:
+            display_trace_id: open_telemetry
+            display_span_id: true
+            display_current_span: false
+            display_span_list: false
+  instrumentation:
+    # Same instruments as the direct template — see templates/instruments.router.yaml.
+    instruments:
+      default_requirement_level: required
+      router:
+        http.server.active_requests: true
+        http.server.request.duration: true
+        apollo.router.overhead: true
+      subgraph:
+        http.client.request.duration:
+          attributes:
+            subgraph.name: true

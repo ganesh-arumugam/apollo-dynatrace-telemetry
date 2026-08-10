@@ -1,0 +1,25 @@
+# Collector-mode demo. Only the collector runs in Docker - the router and the
+# subgraphs run on the host, so the collector reaches them via
+# host.docker.internal (macOS/Windows Docker Desktop).
+#
+#   set -a && . ../.env && set +a
+#   docker compose -f demo/docker-compose.yaml up -d
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
+    environment:
+      DT_OTLP_ENDPOINT: ${DT_OTLP_ENDPOINT}
+      DT_API_TOKEN: ${DT_API_TOKEN}
+      # The router's Prometheus endpoint, as seen from inside the container.
+      ROUTER_METRICS_TARGET: ${ROUTER_METRICS_TARGET:-host.docker.internal:9091}
+      APOLLO_SERVICE_NAMESPACE: ${APOLLO_SERVICE_NAMESPACE:-supergraph}
+      DEPLOY_ENV: ${DEPLOY_ENV:-demo}
+    ports:
+      - "4317:4317"   # OTLP gRPC from the router
+      - "4318:4318"   # OTLP HTTP
+      - "8888:8888"   # collector self-metrics (verify_ingest.sh reads these)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

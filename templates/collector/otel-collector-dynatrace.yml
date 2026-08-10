@@ -1,0 +1,147 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# OTel Collector → Dynatrace: traces + logs + METRICS
+#
+# Completes the collector topology proven out in production deployments
+# (observability/otel-collector-config.dynatrace.yml), which shipped traces and
+# correlated logs and left metrics out of scope. The metrics pipeline below is
+# the missing half, and it is the one with a non-obvious requirement:
+#
+#   Dynatrace accepts DELTA temporality only. A Prometheus scrape is always
+#   CUMULATIVE. Without `cumulativetodelta`, every counter is accepted with a
+#   2xx and then silently dropped — the exact same failure as forgetting
+#   `temporality: delta` on the router's own OTLP exporter.
+#
+#   Router :4000 ──OTLP──────────▶ Collector ─┬─▶ Jaeger      (traces, local)
+#                                             ├─▶ Dynatrace   (traces)
+#   Router /metrics ──scrape─────▶ Collector ─┴─▶ Dynatrace   (metrics, delta)
+#   Router stdout ──filelog──────▶ Collector ──▶ Dynatrace    (logs + trace_id)
+#
+# Env: DT_OTLP_ENDPOINT (no /v1/... suffix), DT_API_TOKEN
+# Token scopes: openTelemetryTrace.ingest, metrics.ingest, logs.ingest
+# ─────────────────────────────────────────────────────────────────────────────
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Router metrics. Two options — pick one:
+  #   (a) this Prometheus scrape (router: telemetry.exporters.metrics.prometheus)
+  #   (b) the router's OTLP metrics exporter with temporality: delta, in which
+  #       case delete this receiver and drop cumulativetodelta from the pipeline.
+  # (a) keeps the router config identical between local and Dynatrace runs, which
+  # is the reason to have a collector in the path at all.
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: apollo-router
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["${env:ROUTER_METRICS_TARGET}"]  # e.g. host.docker.internal:9091
+
+  filelog:
+    include: [/var/log/apollo-router/router.log]
+    start_at: beginning
+    operators:
+      - type: filter
+        expr: 'body matches "^[^{]"'
+      - type: json_parser
+        parse_to: attributes
+        on_error: drop_quiet
+        timestamp:
+          parse_from: attributes.timestamp
+          layout_type: gotime
+          layout: "2006-01-02T15:04:05.999999999Z07:00"
+        severity:
+          parse_from: attributes.level
+        trace:
+          trace_id:
+            parse_from: attributes.trace_id
+          span_id:
+            parse_from: attributes.span_id
+
+processors:
+  batch: {}
+
+  # THE rule for Dynatrace metrics. Converts scraped cumulative counters and
+  # histograms into delta before export. Omit this and metrics vanish silently.
+  cumulativetodelta: {}
+
+  # Metrics batches capped well under Dynatrace's payload limit.
+  batch/metrics:
+    send_batch_size: 500
+    send_batch_max_size: 1000
+    timeout: 10s
+
+  batch/logs:
+    send_batch_size: 200
+    send_batch_max_size: 400
+    timeout: 2s
+
+  # Same service identity on every signal, or Dynatrace won't group them.
+  resource/identity:
+    attributes:
+      - key: service.name
+        value: apollo-router
+        action: insert
+      - key: service.namespace
+        value: supergraph
+        action: insert
+      - key: deployment.environment
+        value: ${env:DEPLOY_ENV}
+        action: insert
+
+  # Router logs carry full request/response bodies when events are on. Strip them:
+  # correlation uses trace_id/span_id, and these fields blow up log volume (and
+  # can carry PII straight into Dynatrace).
+  attributes/trim:
+    actions:
+      - { key: http.request.body, action: delete }
+      - { key: http.request.headers, action: delete }
+      - { key: http.response.body, action: delete }
+      - { key: http.response.headers, action: delete }
+      - { key: spans, action: delete }
+      - { key: span, action: delete }
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # OTLP/HTTP only — Dynatrace has no gRPC ingest. The exporter appends
+  # /v1/traces, /v1/metrics, /v1/logs itself, so DT_OTLP_ENDPOINT must NOT
+  # include a signal suffix (that mistake shows up as 404s).
+  otlphttp/dynatrace:
+    endpoint: ${env:DT_OTLP_ENDPOINT}
+    headers:
+      Authorization: "Api-Token ${env:DT_API_TOKEN}"
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      queue_size: 1000
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource/identity, batch]
+      exporters: [otlp/jaeger, otlphttp/dynatrace]
+    metrics:
+      receivers: [prometheus]
+      processors: [cumulativetodelta, resource/identity, batch/metrics]
+      exporters: [otlphttp/dynatrace]
+    logs:
+      receivers: [filelog]
+      processors: [resource/identity, attributes/trim, batch/logs]
+      exporters: [otlphttp/dynatrace]

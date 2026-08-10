@@ -1,0 +1,9 @@
+telemetry:
+  instrumentation:
+    instruments:
+      router:
+        acme.router.body.size.kb:
+          value: unit
+          type: histogram
+          unit: kb
+          description: "unit baked into the name"

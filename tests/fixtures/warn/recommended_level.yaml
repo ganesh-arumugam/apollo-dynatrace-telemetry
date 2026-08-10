@@ -1,0 +1,4 @@
+telemetry:
+  instrumentation:
+    instruments:
+      default_requirement_level: recommended
