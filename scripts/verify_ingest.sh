@@ -202,18 +202,42 @@ d=json.load(sys.stdin); print(len((d.get("result") or {}).get("records") or []))
     echo "ERR timed out in state ${state}"
   }
 
-  spans=$(dql_records 'fetch spans, from: -2h | filter service.name == "apollo-router" | limit 5')
+  # Ingest is not synchronous: a batch interval plus indexing means data sent
+  # seconds ago is not queryable yet. Running this straight after load.sh would
+  # otherwise report "not ingested" for what is simply lag. Retry before failing.
+  WAIT_SECONDS="${VERIFY_WAIT_SECONDS:-120}"
+  retry_dql() {  # query -> echoes the record count, retrying while it is 0
+    local query="$1" waited=0 out
+    while :; do
+      out=$(dql_records "$query")
+      case "$out" in
+        ERR*) echo "$out"; return ;;
+        0) ;;
+        *)  echo "$out"; return ;;
+      esac
+      [ "$waited" -ge "$WAIT_SECONDS" ] && { echo 0; return; }
+      [ "$waited" -eq 0 ] && echo "  waiting up to ${WAIT_SECONDS}s for ingest..." >&2
+      sleep 15
+      waited=$((waited + 15))
+    done
+  }
+
+  spans=$(retry_dql 'fetch spans, from: -2h | filter service.name == "apollo-router" | limit 5')
   case "$spans" in
     ERR*) fail "spans query failed: ${spans#ERR }" ;;
-    0)    fail "no apollo-router spans in the last 2h — traces are not arriving" ;;
+    0)    fail "no apollo-router spans in the last 2h after ${WAIT_SECONDS}s."
+          echo "        If traffic was just sent, raise VERIFY_WAIT_SECONDS. Otherwise"
+          echo "        check the tracing exporter and the router log for export errors." ;;
     *)    pass "traces: ${spans} span record(s) from apollo-router in the last 2h" ;;
   esac
 
   for metric in $METRICS; do
-    n=$(dql_records "timeseries v = sum(\`${metric}\`), from: -2h")
+    n=$(retry_dql "timeseries v = sum(\`${metric}\`), from: -2h")
     case "$n" in
       ERR*) fail "${metric}: DQL error: ${n#ERR }" ;;
-      0)    fail "${metric}: no series in Grail (not ingested, or dropped as cumulative)" ;;
+      0)    fail "${metric}: no series in Grail after ${WAIT_SECONDS}s — never ingested,"
+            echo "        dropped as cumulative temporality, or the instrument never fired"
+            echo "        (a counter with no increments is never created)" ;;
       *)    pass "${metric}: ${n} series in the last 2h" ;;
     esac
   done

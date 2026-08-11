@@ -203,8 +203,13 @@ def main(argv=None) -> int:
     env_id, token = need("DT_ENVIRONMENT_ID"), need("DT_BEARER_TOKEN")
     service = f'service.name == "{args.service_name}"'
 
-    end = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0)
-    start = end - dt.timedelta(hours=args.hours_ago)
+    # End at "now", not at the last hour boundary: truncating would drop the
+    # in-progress hour, so traffic generated moments ago would not appear at all.
+    # Studio buckets by hour and returns the partial current bucket.
+    now = dt.datetime.now(dt.timezone.utc)
+    end = now
+    start = (now - dt.timedelta(hours=args.hours_ago)).replace(
+        minute=0, second=0, microsecond=0)
 
     print(f"window   {start:%Y-%m-%dT%H:%M}Z .. {end:%Y-%m-%dT%H:%M}Z")
     print(f"graph    {graph_id}")
