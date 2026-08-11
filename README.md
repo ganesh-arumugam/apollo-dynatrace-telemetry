@@ -13,11 +13,14 @@ validators, and a test harness that verifies the export path without a tenant.
   [`docs/dynatrace-credentials.md`](docs/dynatrace-credentials.md)
 - **Keeping Prometheus alongside Dynatrace** —
   [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md)
+- **Understanding percentiles and histogram buckets** —
+  [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md)
 
 ## Common questions
 
 | Question | Where it's answered |
 |---|---|
+| What are histogram buckets, and why is my p95 a guess? | [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md) — the mechanism behind the recommendations, with a worked example |
 | Why doesn't the p95 in Dynatrace match GraphOS Studio? | [`docs/studio-vs-dynatrace-latency.md`](docs/studio-vs-dynatrace-latency.md) — the two pipelines, which numbers are comparable, and how to read percentiles correctly |
 | Can we run Prometheus and Dynatrace at the same time? | [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md) — yes; config, what's shared, what isn't |
 | What does `temporality: delta` actually mean, and does it affect our data? | [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md#cumulative-on-one-side-delta-on-the-other--both-correct) — the same counter, two transports, both correct |
@@ -89,6 +92,7 @@ docs/
   datadog-parity.md                # migrating from the Datadog template
   dynatrace-credentials.md         # UI click-path for each token / OAuth client
   studio-vs-dynatrace-latency.md   # comparing GraphOS Studio and Dynatrace numbers
+  percentiles-and-buckets.md       # how percentiles, buckets and rollup actually work
 templates/
   dynatrace.router.yaml            # direct: metrics + traces + logs
   dynatrace-metrics.router.yaml    # single-signal drop-in snippets

@@ -65,6 +65,8 @@ counter correctly reads zero while Studio reports 22.
 Pick **p90 or p99** on both sides. Studio exposes no p95, so a p95 tile has no
 counterpart.
 
+> New to histogram buckets or `rollup`? [`percentiles-and-buckets.md`](percentiles-and-buckets.md) explains the mechanism behind every recommendation here, with a worked example.
+
 ## Why percentiles must come from spans
 
 `percentile()` on a metric requires a `rollup:`, and rollup collapses each time
