@@ -1,9 +1,7 @@
 # Apollo Router on Dynatrace — DQL query pack
 
-One query per instrument, each with a **Good / Bad** reading so an on-call
-engineer who has never seen the router can still interpret the chart. This is the
-Every tile carries the same kind of note, so a dashboard is readable by someone
-who has never seen the router before.
+One query per instrument, each with a **Good / Bad** reading, so a dashboard built
+from these is readable by an on-call engineer who has never seen the router.
 
 Queries use the form proven against a live tenant (an inline `filter:` on the
 `timeseries` command, `by:` for dimensions, `| summarize ... | sort | limit` for
@@ -23,13 +21,13 @@ Neither looks like a spelling problem — both look like an ingest failure.
 **Delta temporality**: all counters arrive as delta, so `sum()` over an interval
 *is* the count in that interval. Do not apply a delta function again.
 
-**Percentiles**: `rollup: avg` over 1-minute intervals computes a p95 per minute
-and then averages them — good for a trend line, but not the percentile for the
-window. To
-compare against GraphOS Studio (which merges histograms across the whole selected
-range), set `interval` to the full comparison window instead. And remember the
-error bar is the bucket width: on the router's default boundaries a p95 between
-1s and 5s is interpolated inside a bucket 400% wide. See
+**Percentiles come from spans, not from metrics.** `percentile()` on a metric
+requires a `rollup:`, and rollup collapses each interval to one value *before* the
+percentile is taken — so p50, p95 and p99 return the same number: the average. Use
+`fetch spans` for any percentile. If you must chart the histogram metric, the error
+bar is the bucket width: on the router's default boundaries a p95 between 1s and 5s
+is interpolated inside a bucket 400% wide. See
+[percentiles-and-buckets.md](../docs/percentiles-and-buckets.md),
 `docs/studio-vs-dynatrace-latency.md` and `templates/histogram-buckets.router.yaml`.
 
 ---
@@ -64,13 +62,18 @@ saturation) and subgraph latency (downstream slowness) to see which layer it is.
 ### Latency percentiles (client-observed)
 
 ```dql
-timeseries {
-    p50 = percentile(http.server.request.duration, 50, rollup: avg),
-    p95 = percentile(http.server.request.duration, 95, rollup: avg),
-    p99 = percentile(http.server.request.duration, 99, rollup: avg)
-  },
-  filter: {service.name == "apollo-router"}
+fetch spans
+| filter service.name == "apollo-router" and request.is_root_span == true
+| makeTimeseries {
+    p50 = percentile(duration, 50),
+    p95 = percentile(duration, 95),
+    p99 = percentile(duration, 99)
+  }
 ```
+
+Read from spans deliberately. The same three percentiles taken from
+`http.server.request.duration` with `rollup: avg` return one identical number,
+because rollup collapses the interval before the percentile is computed.
 
 **Good**: p99 within ~3x of p50 and stable across deploys.
 **Bad**: p99 detaching from p50 means a subset of operations is degrading. Split
@@ -151,8 +154,9 @@ timeseries lat = avg(http.client.request.duration),
 
 ### Subgraph errors, by subgraph
 
-Selected from [`docs/metrics.md` §2](../docs/metrics.md#2-is-it-the-router-or-a-subgraph).
-`custom` — the router does not emit this one until you declare it.
+Selected from [`docs/metrics.md` §3](../docs/metrics.md#3-subgraph-outgoing-http--is-it-the-router-or-a-subgraph).
+Tagged `declare` — the router does not emit this one until you add it to
+`instruments.router.yaml`.
 
 **1. Enable it.** From
 [`instruments.router.yaml`](../templates/instruments.router.yaml), under

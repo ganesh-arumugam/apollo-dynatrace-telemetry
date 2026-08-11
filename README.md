@@ -13,6 +13,8 @@ validators, and a test harness that verifies the export path without a tenant.
   [`docs/dynatrace-credentials.md`](docs/dynatrace-credentials.md)
 - **Keeping Prometheus alongside Dynatrace** —
   [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md)
+- **Which metrics to collect, and why** —
+  [`docs/metrics.md`](docs/metrics.md)
 - **Understanding percentiles and histogram buckets** —
   [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md)
 
@@ -20,6 +22,8 @@ validators, and a test harness that verifies the export path without a tenant.
 
 | Question | Where it's answered |
 |---|---|
+| Which router metrics exist, and which should we collect? | [`docs/metrics.md`](docs/metrics.md) — every metric, the question it answers, what it costs to enable, and which Dynatrace refuses |
+| How do we monitor whether a subgraph is reachable? | [`docs/metrics.md`](docs/metrics.md#11-subgraph-health--the-gap) — no product answer exists; the workarounds and their trade-offs |
 | What are histogram buckets, and why is my p95 a guess? | [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md) — the mechanism behind the recommendations, with a worked example |
 | Why doesn't the p95 in Dynatrace match GraphOS Studio? | [`docs/studio-vs-dynatrace-latency.md`](docs/studio-vs-dynatrace-latency.md) — the two pipelines, which numbers are comparable, and how to read percentiles correctly |
 | Can we run Prometheus and Dynatrace at the same time? | [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md) — yes; config, what's shared, what isn't |
@@ -91,6 +95,7 @@ docs/
   prometheus-and-dynatrace.md      # running both metrics backends together
   datadog-parity.md                # migrating from the Datadog template
   dynatrace-credentials.md         # UI click-path for each token / OAuth client
+  metrics.md                       # every router metric: why, cost to enable, where
   studio-vs-dynatrace-latency.md   # comparing GraphOS Studio and Dynatrace numbers
   percentiles-and-buckets.md       # how percentiles, buckets and rollup actually work
 templates/
