@@ -61,11 +61,11 @@ restart. Dynatrace requires delta, so these are excluded throughout.
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `dynatrace.router.requests` | How much traffic, by status class? | counter | `declare` | metric · [recipe §1](../dashboards/dql-queries.md#1-golden-signals) |
-| `dynatrace.router.server.errors` | Did a request fail to produce a GraphQL response at all? | counter | `declare` | metric · [recipe §1](../dashboards/dql-queries.md#1-golden-signals) |
-| `http.server.active_requests` | How many requests are in flight? A climbing floor means they are piling up. | gauge | `declare` | metric · [recipe §1](../dashboards/dql-queries.md#1-golden-signals) |
-| root span `duration` | What latency do clients actually experience? | span | `span` | **span** · [recipe §1](../dashboards/dql-queries.md#1-golden-signals) |
-| `http.server.request.body.size` · `http.server.response.body.size` | Are payloads growing? Large responses usually mean an over-fetching client. | histogram | `declare` | metric · [recipe §6](../dashboards/dql-queries.md#6-payload-sizes) |
+| `dynatrace.router.requests` | How much traffic, by status class? | counter | `declare` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
+| `dynatrace.router.server.errors` | Did a request fail to produce a GraphQL response at all? | counter | `declare` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
+| `http.server.active_requests` | How many requests are in flight? A climbing floor means they are piling up. | gauge | `declare` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
+| root span `duration` | What latency do clients actually experience? | span | `span` | **span** · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
+| `http.server.request.body.size` · `http.server.response.body.size` | Are payloads growing? Large responses usually mean an over-fetching client. | histogram | `declare` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
 | `apollo.router.session.count.active` | Active sessions — **being removed in 3.0**, use `http.server.active_requests` | gauge | `default` | metric · avoid |
 
 ---
@@ -77,8 +77,8 @@ the first row is the single most cross-validated insight in this document.
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `apollo.router.graphql_error` | Are operations failing? **The one status codes miss.** | counter | `default` | metric · [recipe §3](../dashboards/dql-queries.md#3-graphql-level-view) |
-| `dynatrace.graphql.operations` | How many GraphQL operations, by type? Diverges from request count under batching. | counter | `declare` | metric · [recipe §3](../dashboards/dql-queries.md#3-graphql-level-view) |
+| `apollo.router.graphql_error` | Are operations failing? **The one status codes miss.** | counter | `default` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
+| `dynatrace.graphql.operations` | How many GraphQL operations, by type? Diverges from request count under batching. | counter | `declare` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
 | `apollo.router.operations` | Total operations processed | counter | `default` | metric |
 | `apollo.router.operations.lexical_tokens` | Token count per operation — a proxy for query size | histogram | `default` | metric |
 | `apollo.router.operations.recursion` | Query nesting depth. Sudden growth is often an abusive or generated query. | histogram | `default` | metric |
@@ -93,11 +93,11 @@ a bug: batching, subscriptions and sampling drive them apart.
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `apollo.router.overhead` | Is the router the bottleneck, or waiting on someone else? **Three pitfalls — read the recipe.** | histogram | `declare` | metric · [recipe §2](../dashboards/dql-queries.md#2-is-it-the-router-or-the-subgraphs) |
-| `http.client.request.duration` by `subgraph.name` | Which subgraph is slow? | histogram | `declare` | metric · [recipe §2](../dashboards/dql-queries.md#2-is-it-the-router-or-the-subgraphs) |
-| `dynatrace.subgraph.errors` by `subgraph.name` | Which subgraph is returning errors? | counter | `declare` | metric · [recipe §2](../dashboards/dql-queries.md#2-is-it-the-router-or-the-subgraphs) |
-| `subgraph` span `duration` | Subgraph latency percentiles you can trust | span | `span` | **span** · [recipe §2](../dashboards/dql-queries.md#2-is-it-the-router-or-the-subgraphs) |
-| `http.client.request.body.size` · `http.client.response.body.size` | Is a subgraph returning far more than the client asked for? | histogram | `declare` | metric · [recipe §6](../dashboards/dql-queries.md#6-payload-sizes) |
+| `apollo.router.overhead` | Is the router the bottleneck, or waiting on someone else? **Three pitfalls — read the recipe.** | histogram | `declare` | metric · [how to read it](../dashboards/dql-queries.md#router-versus-subgraph) |
+| `http.client.request.duration` by `subgraph.name` | Which subgraph is slow? | histogram | `declare` | metric · [how to read it](../dashboards/dql-queries.md#router-versus-subgraph) |
+| `dynatrace.subgraph.errors` by `subgraph.name` | Which subgraph is returning errors? | counter | `declare` | metric · [how to read it](../dashboards/dql-queries.md#router-versus-subgraph) |
+| `subgraph` span `duration` | Subgraph latency percentiles you can trust | span | `span` | **span** · [how to read it](../dashboards/dql-queries.md#router-versus-subgraph) |
+| `http.client.request.body.size` · `http.client.response.body.size` | Is a subgraph returning far more than the client asked for? | histogram | `declare` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
 | `apollo.router.connection.acquire.duration` | Time to get a connection to a subgraph. Rising = pool exhaustion, not subgraph slowness. | histogram | `default` | metric |
 
 **`subgraph.name` matters more than any metric here.** Without it these are
@@ -119,14 +119,14 @@ utilisation stays flat.
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `apollo.router.compute_jobs.queued` | Is work waiting for a worker? The leading indicator. | gauge | `default` | metric · [recipe §7](../dashboards/dql-queries.md#7-saturation--is-the-router-itself-the-constraint) |
-| `apollo.router.compute_jobs.queue.wait.duration` | How long does work wait before starting? | histogram | `default` | metric · [recipe §7](../dashboards/dql-queries.md#7-saturation--is-the-router-itself-the-constraint) |
-| `apollo.router.compute_jobs.execution.duration` | How long does the work itself take? Compare against wait. | histogram | `default` | metric · [recipe §7](../dashboards/dql-queries.md#7-saturation--is-the-router-itself-the-constraint) |
-| `apollo.router.compute_jobs.duration` by `job.type` | Which job type is growing — `query_parsing` or `query_planning`? | histogram | `default` | metric · [recipe §7](../dashboards/dql-queries.md#7-saturation--is-the-router-itself-the-constraint) |
-| `apollo.router.query_planning.plan.duration` | How long to build a plan? | histogram | `default` | metric · [recipe §5](../dashboards/dql-queries.md#5-query-planning) |
-| `apollo.router.query_planning.total.duration` | Plan time **including queue wait** — the number a client feels | histogram | `default` | metric · [recipe §5](../dashboards/dql-queries.md#5-query-planning) |
-| `apollo.router.query_planning.warmup.duration` | Is cache warm-up working after a deploy? | histogram | `default` | metric · [recipe §5](../dashboards/dql-queries.md#5-query-planning) |
-| `apollo.router.query_planning.plan.evaluated_plans` | Plan-space explosion. High counts mean an expensive schema shape. | histogram | `default` | metric · [recipe §5](../dashboards/dql-queries.md#5-query-planning) |
+| `apollo.router.compute_jobs.queued` | Is work waiting for a worker? The leading indicator. | gauge | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
+| `apollo.router.compute_jobs.queue.wait.duration` | How long does work wait before starting? | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
+| `apollo.router.compute_jobs.execution.duration` | How long does the work itself take? Compare against wait. | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
+| `apollo.router.compute_jobs.duration` by `job.type` | Which job type is growing — `query_parsing` or `query_planning`? | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
+| `apollo.router.query_planning.plan.duration` | How long to build a plan? | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
+| `apollo.router.query_planning.total.duration` | Plan time **including queue wait** — the number a client feels | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
+| `apollo.router.query_planning.warmup.duration` | Is cache warm-up working after a deploy? | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
+| `apollo.router.query_planning.plan.evaluated_plans` | Plan-space explosion. High counts mean an expensive schema shape. | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
 | `apollo.router.query_planning.plan.evaluated_paths` | Same, at path granularity | histogram | `default` | metric |
 | `apollo.router.query_planner.memory` | Planner memory. **Unix + global-allocator feature only.** | gauge | `default` | metric |
 | `apollo.router.compute_jobs.active_jobs` | — | UpDownCounter | **excluded** | unusable under delta |
@@ -137,8 +137,8 @@ utilisation stays flat.
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `apollo.router.cache.hit.time` / `.miss.time` by `kind` | Hit rate for query-plan, APQ and introspection caches | histogram | `default` | metric · [recipe §4](../dashboards/dql-queries.md#4-cache) |
-| `apollo.router.cache.size` by `kind` | How full is each cache? | gauge | `default` | metric · [recipe §4](../dashboards/dql-queries.md#4-cache) |
+| `apollo.router.cache.hit.time` / `.miss.time` by `kind` | Hit rate for query-plan, APQ and introspection caches | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
+| `apollo.router.cache.size` by `kind` | How full is each cache? | gauge | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
 | `apollo.router.cache.storage.estimated_size` | Bytes held. Pair with hit rate before resizing. | gauge | `default` | metric |
 | `apollo.router.response.cache` by `subgraph.name`, `cache.hit` | Is entity caching earning its keep? | counter | `requires entity caching` | metric · ⚠ unverified |
 | `apollo.router.cache.redis.connections` | — | UpDownCounter | **excluded** | unusable under delta |
@@ -182,7 +182,7 @@ while dashboards stay green.
 | `apollo.router.lifecycle.query_planner.init` | Planner init time at startup | histogram | `default` | metric |
 | `apollo.router.state.change.total` | Router state transitions — restarts and reloads | counter | `default` | metric |
 | `apollo.router.supergraph.federation` | Federation version in use. Useful as a deploy marker. | gauge | `default` | metric |
-| `apollo.router.open_connections` | Connections held open | gauge | `default` | metric · [recipe §7](../dashboards/dql-queries.md#7-saturation--is-the-router-itself-the-constraint) |
+| `apollo.router.open_connections` | Connections held open | gauge | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
 | `apollo.router.pipelines` | Active pipelines. Expect **1 per instance** — 10 replicas means 10. | gauge | `default` | metric |
 | `apollo.router.telemetry.studio.reports` | Is usage reporting to Studio working? | counter | `default` | metric |
 
