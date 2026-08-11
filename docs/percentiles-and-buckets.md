@@ -19,7 +19,8 @@ collapse, and tuning buckets for that number is wasted effort — it was never a
 Sort 100 requests by duration. The p95 is the 95th. It means 95% finished faster than this.
 
 An average hides the tail: 99 requests at 50 ms and one at 10 s averages to 149 ms, a number
-nobody experienced. The p99 is 10 s, which is what the slowest user felt.
+no single request experienced. The p99 is 10 s, which is what the slowest user
+actually saw.
 
 Computing a percentile requires **the individual values, in order**. That is exactly what a
 histogram throws away.
@@ -55,7 +56,7 @@ even spread and reports:
 0.5 + 0.5 × (1.0 − 0.5) = 0.75 s
 ```
 
-That last step is a fabrication. If all four requests were ~0.52 s, the true p95 is ~0.53 s
+That last step is an assumption, not a measurement. If all four requests were ~0.52 s, the true p95 is ~0.53 s
 and **0.75 s is 42% high**. They could equally have been 0.98 s. The stored data cannot
 distinguish the cases.
 
@@ -104,13 +105,13 @@ flowchart LR
 
 Measured on one hour of identical traffic: three byte-identical series, while the true p90 over
 the same window was 713 ms. This is not an approximation of a percentile — it is a different
-statistic carrying a percentile's label. Compare Studio's p90 of 730 ms against a rollup tile
-showing 475 ms and you will hunt a 35% ingest discrepancy that does not exist.
+statistic carrying a percentile's label. Comparing a Studio p90 of 730 ms against a
+rollup tile showing 475 ms suggests a 35% ingest discrepancy that does not exist.
 
 Spans carry one exact `duration` per request: no buckets, so no interpolation; no rollup, so no
 collapse. That is why every percentile tile in this dashboard reads from spans, and why the two
 that cannot — router overhead and payload sizes, which no span carries — report avg/max instead
-of a percentile they cannot honestly compute.
+of a percentile that cannot be computed from the available data.
 
 ## The recommendations, as consequences
 
@@ -121,8 +122,8 @@ of a percentile they cannot honestly compute.
 | Put the top boundary at or above the request timeout | otherwise the last bucket is unbounded and its percentile is meaningless |
 | Compare p90 or p99 with Studio, never p95 | Studio's API exposes p50/p90/p99 only, so a p95 tile has no counterpart |
 | Set `interval` to the whole window for a comparison number | the average of 60 per-minute p95s is not the hour's p95 |
-| Stop attributing disagreements to `temporality: delta` | temporality changes how counts accumulate between exports; it cannot move a percentile, and Studio is not on the OTLP metrics pipeline |
+| Do not attribute disagreements to `temporality: delta` | temporality changes how counts accumulate between exports; it cannot move a percentile, and Studio is not on the OTLP metrics pipeline |
 
-In one line: a histogram trades away the individual measurements, so every percentile from one
-is a guess the width of its bucket — and `rollup` discards even the distribution, returning an
-average. Spans keep the real values, so ask spans.
+In summary: a histogram discards the individual measurements, so any percentile derived
+from one carries an error bar the width of its bucket, and `rollup` discards the
+distribution as well, returning an average. Spans retain the individual values.

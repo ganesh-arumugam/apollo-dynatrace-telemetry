@@ -9,8 +9,11 @@ than a competing one. Sections 8–11 cover ground that grouping does not.
 
 ## How to read the columns
 
-**Get it by** — what it costs you. Everything you configure lives in one file,
-[`instruments.router.yaml`](../templates/instruments.router.yaml).
+**Get it by** — what it costs you. Every metric in this list is configured in one
+file, [`instruments.router.yaml`](../templates/instruments.router.yaml). Spans and
+histogram buckets are configured separately, in
+[`spans.router.yaml`](../templates/spans.router.yaml) and
+[`histogram-buckets.router.yaml`](../templates/histogram-buckets.router.yaml).
 
 | Tag | Meaning |
 |---|---|
@@ -33,12 +36,12 @@ when reusing a query from another row:
 | gauge | `avg()` / `max()` | `sum()` across instances double-counts |
 | histogram, percentile wanted | **spans** | the average wearing a percentile's label |
 
-## Four things that catch everyone
+## Four common pitfalls
 
 **GraphQL errors are HTTP 200.** A failed operation returns 200 with an `errors`
 array, so any error rate built on status codes reports zero while the graph is
-broken. Netflix built response-body introspection specifically for this; use
-`apollo.router.graphql_error`.
+broken. Error monitoring therefore needs a GraphQL-aware counter rather than a
+status-code one: use `apollo.router.graphql_error`.
 
 **Latency percentiles come from spans, not the duration histogram.**
 `percentile()` on a metric requires a `rollup` that collapses the interval first,
@@ -90,7 +93,7 @@ a bug: batching, subscriptions and sampling drive them apart.
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `apollo.router.overhead` | Is the router the bottleneck, or waiting on someone else? **Three footguns — read the recipe.** | histogram | `declare` | metric · [recipe §2](../dashboards/dql-queries.md#2-is-it-the-router-or-the-subgraphs) |
+| `apollo.router.overhead` | Is the router the bottleneck, or waiting on someone else? **Three pitfalls — read the recipe.** | histogram | `declare` | metric · [recipe §2](../dashboards/dql-queries.md#2-is-it-the-router-or-the-subgraphs) |
 | `http.client.request.duration` by `subgraph.name` | Which subgraph is slow? | histogram | `declare` | metric · [recipe §2](../dashboards/dql-queries.md#2-is-it-the-router-or-the-subgraphs) |
 | `dynatrace.subgraph.errors` by `subgraph.name` | Which subgraph is returning errors? | counter | `declare` | metric · [recipe §2](../dashboards/dql-queries.md#2-is-it-the-router-or-the-subgraphs) |
 | `subgraph` span `duration` | Subgraph latency percentiles you can trust | span | `span` | **span** · [recipe §2](../dashboards/dql-queries.md#2-is-it-the-router-or-the-subgraphs) |
@@ -98,10 +101,9 @@ a bug: batching, subscriptions and sampling drive them apart.
 | `apollo.router.connection.acquire.duration` | Time to get a connection to a subgraph. Rising = pool exhaustion, not subgraph slowness. | histogram | `default` | metric |
 
 **`subgraph.name` matters more than any metric here.** Without it these are
-graph-wide averages nobody can act on. With it, a chart names the team that owns
-the problem — and most router incidents are subgraph incidents. Netflix and Airbnb
-independently concluded the same thing: in a federated graph, "who gets paged" is a
-schema question.
+graph-wide averages that cannot be acted on. With it, a chart names the team that owns
+the problem. Most router incidents originate in a subgraph, so in a federated graph
+the question of which team owns a failure is answered by the schema.
 
 **Compare overhead only within one router version.** Work moves in and out of the
 router's critical path between releases.
@@ -110,9 +112,10 @@ router's critical path between releases.
 
 ## 4. Query planning and compute jobs
 
-The router's own work queue. **This is a saturation domain that CPU-based
-autoscaling misses** — a large operator published a load test where query-planning
-p99 went from 12.6 ms to 7.8 s between 130k and 140k req/min while CPU stayed flat.
+The router's own work queue, and **a saturation domain that CPU-based autoscaling
+does not detect.** Published load testing shows query-planning p99 degrading from
+milliseconds to seconds across a narrow increase in throughput while CPU
+utilisation stays flat.
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
@@ -155,14 +158,14 @@ self-heals; **not** recovering means warm-up is misconfigured.
 
 A coprocessor adds a network hop to every request it handles, and **its time is
 counted inside `apollo.router.overhead`** — so a slow coprocessor looks like router
-regression. Published measurements put Rhai at ~100 µs p95 and coprocessors at
-~350 µs per stage; treat those as a budget. Coprocessors are invoked **per
+regression. Published measurements put Rhai at approximately 100 µs p95 and coprocessors at
+approximately 350 µs per stage; treat those as a budget. Coprocessors are invoked **per
 subgraph** at subgraph stages, so co-locate them.
 
-**Known limitation (TSH-23276, open):** the GraphQL operation name is not
-propagated into the Router→coprocessor span, so Dynatrace shows only `/`.
-Coprocessor cost cannot be attributed to an operation, and these metric tiles are
-the only coprocessor view available until that changes.
+**Known limitation:** the GraphQL operation name is not propagated into the
+Router→coprocessor span, so Dynatrace shows only `/`. Coprocessor cost cannot be
+attributed to an operation, and these metric tiles are the only coprocessor view
+available until that is addressed upstream.
 
 ---
 
@@ -175,7 +178,7 @@ while dashboards stay green.
 |---|---|---|---|---|
 | `apollo.router.uplink.fetch.count.total` | Is schema/PQ delivery working? **A failed fetch means the router runs on a stale schema indefinitely.** | counter | `default` | metric |
 | `apollo.router.uplink.fetch.duration.seconds` | How long does uplink take? Rising = delivery degrading before it fails. | histogram | `default` | metric |
-| `apollo.router.lifecycle.license` | Licence state. Expiry is a scheduled outage nobody has on a dashboard. | gauge | `default` | metric |
+| `apollo.router.lifecycle.license` | Licence state. Expiry is a scheduled outage that is rarely dashboarded. | gauge | `default` | metric |
 | `apollo.router.lifecycle.query_planner.init` | Planner init time at startup | histogram | `default` | metric |
 | `apollo.router.state.change.total` | Router state transitions — restarts and reloads | counter | `default` | metric |
 | `apollo.router.supergraph.federation` | Federation version in use. Useful as a deploy marker. | gauge | `default` | metric |
@@ -183,16 +186,16 @@ while dashboards stay green.
 | `apollo.router.pipelines` | Active pipelines. Expect **1 per instance** — 10 replicas means 10. | gauge | `default` | metric |
 | `apollo.router.telemetry.studio.reports` | Is usage reporting to Studio working? | counter | `default` | metric |
 
-**Schema delivery is a real runtime dependency, not a formality.** Booking.com ran
-~1,000 gateway instances polling every 10 s — ~8.3M fetches/day — and hit a period
-where Apollo's dashboard showed 99.9% uptime while their own event logging revealed
-**~2.4% failure** against an expected 0.05%. They could not tell which instances
-were stale because the runtime does not expose the loaded schema version. Watch
-uplink fetch success and duration.
+**Schema delivery is a runtime dependency, not a formality.** A published account
+describes a large gateway fleet polling every 10 seconds, where the observed fetch
+failure rate was roughly fifty times higher than expected while the platform status
+dashboard reported normal uptime. Stale instances could not be identified, because
+the runtime does not expose the schema version it has loaded. Watch uplink fetch
+success and duration.
 
-**A caution on `pipelines`**: a stable value of 1 does **not** rule out a leak. One
-customer saw memory climb 282 → 517 MB with the metric pinned at 1. The name also
-differs by exporter — `apollo_router_pipelines` on Prometheus.
+**A caution on `pipelines`**: a stable value of 1 does **not** rule out a memory
+leak — resident memory can grow substantially while this metric stays pinned at 1.
+The name also differs by exporter: `apollo_router_pipelines` on Prometheus.
 
 ---
 
@@ -257,14 +260,14 @@ attributes to the router process rather than the pod.
 pod is alive. It says nothing about whether subgraphs are reachable, so a router
 can report healthy while the graph is unusable.
 
-Two customers have asked for this independently, and it is a live support request
-(TSH-23992, noted there as "a recurring ask across enterprise accounts operating
-federated graphs at scale"). Apollo has it logged with **no current plans**;
-circuit breaking in Router v3 is the long-term answer.
+This is a recurring request from teams operating federated graphs at scale. It is
+logged with Apollo, with no current implementation timeline; circuit breaking in
+Router v3 is the longer-term direction.
 
-The failure this leaves open is real: one operator had healthy pods while DNS
-routing failed intermittently, because their edge health checks resolved IPs rather
-than names — ~1.5 hours of elevated errors peaking near 20%.
+The gap this leaves is not theoretical. Edge health checks that resolve addresses
+rather than names will report healthy pods while DNS routing fails intermittently,
+which can sustain an elevated error rate for hours without any signal from the
+router itself.
 
 What you can do today:
 
@@ -285,17 +288,18 @@ cardinality.
 
 Dynatrace does not accept every OTLP metric type the router emits. Rejected metrics
 fail **at ingest**, not in the router, so the router logs look clean and the metric
-simply never appears. One customer report recorded **107 rejected metrics**.
+simply never appears. This affects a substantial number of router metrics in a
+single environment, not one or two.
 
 Two confirmed by name:
 
-| Metric | Rejection | Corroboration |
+| Metric | Rejection reason | How this was confirmed |
 |---|---|---|
 | `apollo.router.schema.load.duration` | `UNSUPPORTED_METRIC_TYPE_HISTOGRAM` | absent from a tenant where 39 other `apollo.router.*` metrics arrived, despite firing at every startup |
 | `apollo.router.operations.validation` | `UNSUPPORTED_METRIC_TYPE_MONOTONIC_CUMULATIVE_SUM` | same |
 
-The full 107 is not published, so treat this as a class of problem rather than a
-closed list: **if a metric you expect never appears and the router shows no export
+The complete set is not published, so treat this as a class of problem rather than
+a closed list: **if a metric you expect never appears and the router shows no export
 errors, suspect ingest rejection** before you suspect your config. Check the
 Dynatrace ingest response rather than the router log.
 
@@ -333,10 +337,10 @@ safe — they only make the ceiling easier to estimate.
 
 **And the remedy is currently broken.** The documented lever for pruning metrics —
 `views` / metric dropping — **does not accept wildcards** despite the docs showing
-them (TSH-24017). `*`, `.*`, `apollo_*` and `apollo.*` all silently no-op; only
-exact metric names work, and at least one metric could not be dropped in either
-spelling. `cardinality_overflow` is also a single global counter, so it will tell
-you that *something* overflowed but not which stream (TSH-21610).
+them. `*`, `.*`, `apollo_*` and `apollo.*` all silently no-op; only exact metric
+names work, and some metrics cannot be dropped in either spelling.
+`cardinality_overflow` is also a single global counter, so it reports that
+*something* overflowed without identifying which stream.
 
 Practical consequence: budget by **not enabling** attributes rather than by pruning
 later. If you must prune, enumerate exact metric names one at a time and verify each
@@ -357,5 +361,5 @@ Not a metrics question, but it decides what you build where.
 
 And the converse: **Studio cannot alert.** An external tool is mandatory for
 production alerting. Studio Insights also does not consume your OTLP metrics — it
-is a separate channel, and usage reporting to it is sampled. Several support cases
-exist purely because that was assumed otherwise.
+is a separate channel, and usage reporting to it is sampled. This is a common source of
+confusion when the two are compared directly.

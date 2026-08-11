@@ -97,15 +97,16 @@ sections:
   #
   # `timeseries percentile(metric, N)` requires a `rollup:`, and rollup collapses
   # each time slot to one value *before* the percentile is taken — so p50, p95 and
-  # p99 all return that same rolled-up number. Verified against a live tenant:
-  # all three series came back byte-identical (min 0.001053, max 0.4753).
-  # It is not an approximation, it is the average wearing a percentile's label.
+  # p99 all return that same rolled-up number. Verified against a live tenant: all
+  # three series returned identical values (min 0.001053, max 0.4753). This is not an
+  # approximation of a percentile but a different statistic.
   #
   # Spans carry one `duration` per request, so percentile over spans is a real
   # percentile. Same window, span-based: p50 1.2ms, p95 3.1ms, p99 9.1ms.
   #
   # Where no span carries the value (router overhead, payload sizes) the tile
-  # reports avg/max instead of a percentile it cannot honestly compute.
+  # reports avg/max rather than a percentile that cannot be computed from the
+  # available data.
   - title: "**Latency & overhead** — router or subgraphs?"
     tiles:
       - name: Router Latency — p50 / p95 / p99 (root spans)
@@ -119,8 +120,8 @@ sections:
               p95 = percentile(duration, 95),
               p99 = percentile(duration, 99)
             }
-      # THREE FOOTGUNS ON THIS METRIC. It is the one customers reach for to answer
-      # "is it us or the subgraph", and all three are undocumented upstream:
+      # THREE PITFALLS ON THIS METRIC. It is the metric most often used to answer
+      # "is it the router or the subgraph", and each one invalidates the number:
       #
       #  1. Filter `subgraph.active_requests == "false"` or you are averaging
       #     router-only time together with router-while-waiting-on-a-subgraph.
@@ -193,7 +194,7 @@ sections:
       # It is an UpDownCounter, and UpDownCounters under delta temporality report
       # negative or corrupted values — a single dropped delta corrupts the running
       # total until the router restarts. Dynatrace requires delta, so the two are
-      # incompatible. Same applies to `apollo.router.opened.subscriptions` and
+      # incompatible. The same applies to `apollo.router.opened.subscriptions` and
       # `apollo.router.cache.redis.connections`: keep all three out of dashboards
       # and alerts on a delta pipeline.
       - name: Compute Job Queue Depth
@@ -275,10 +276,10 @@ sections:
   # broken. The `coprocessor.stage` / `coprocessor.succeeded` attributes are the
   # documented ones but are unverified here, since this pack runs no coprocessor.
   #
-  # KNOWN LIMITATION (TSH-23276, open with engineering): the GraphQL operation name
-  # is not propagated into the Router→coprocessor span, so Dynatrace shows only `/`.
-  # Coprocessor cost therefore cannot be attributed to an operation, and these
-  # metric tiles are the only coprocessor view available until that is fixed.
+  # KNOWN LIMITATION: the GraphQL operation name is not propagated into the
+  # Router→coprocessor span, so Dynatrace shows only `/`. Coprocessor cost therefore
+  # cannot be attributed to an operation, and these metric tiles are the only
+  # coprocessor view available until that is addressed upstream.
   - title: |
       **Coprocessors** — only populated when a coprocessor is configured
       (`coprocessor.url`); a coprocessor adds a network hop to every request it

@@ -99,15 +99,16 @@ docs/
   studio-vs-dynatrace-latency.md   # comparing GraphOS Studio and Dynatrace numbers
   percentiles-and-buckets.md       # how percentiles, buckets and rollup actually work
 templates/
-  dynatrace.router.yaml            # direct: metrics + traces + logs
-  dynatrace-metrics.router.yaml    # single-signal drop-in snippets
-  dynatrace-traces.router.yaml
-  dynatrace-logs.router.yaml
+  # Start here — the exporter config for direct-to-Dynatrace
+  dynatrace.router.yaml            # metrics + traces, one file
   dynatrace-activegate.router.yaml # Managed / ActiveGate endpoint shapes
-  instruments.router.yaml          # metrics + instruments ("what to measure")
-  spans.router.yaml                # spans + GraphQL error marking
+  # What to measure. Separate files because they configure different things.
+  instruments.router.yaml          # which metrics to emit, and their attributes
+  spans.router.yaml                # span attributes + GraphQL error marking
+  histogram-buckets.router.yaml    # bucket boundaries, if charting the metric
+  dynatrace-logs.router.yaml       # why logs need stdout forwarding, and how
+  # Alternatives to the direct path — not needed for a Dynatrace-only setup
   prometheus-and-dynatrace.router.yaml  # both metrics backends at once
-  histogram-buckets.router.yaml    # bucket boundaries that match Studio's resolution
   collector/
     router-to-collector.router.yaml  # router side of the collector topology
     otel-collector-dynatrace.yml     # collector side, incl. the metrics pipeline

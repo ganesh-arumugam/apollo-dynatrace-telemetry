@@ -108,16 +108,15 @@ timeseries {
 isolates parsing, validation, query planning, response composition, and plugin
 (Rhai/coprocessor) execution. Units are **seconds**.
 
-**Three footguns, all undocumented upstream. Get any of them wrong and the number
-is quietly meaningless:**
+**Three pitfalls. Any one of them makes the number quietly meaningless:**
 
 1. **Filter `subgraph.active_requests == "false"`.** Without it you average
    router-only time together with router-while-waiting-on-a-subgraph, which is the
    opposite of what this metric is for. The value is a **string** — `== false`
    unquoted matches nothing and the chart goes silently empty.
 2. **Coprocessor time and plugin network calls are counted inside overhead.** A
-   Rhai script or coprocessor that makes a network call inflates this number, and
-   customers have mistaken that for router regression.
+   Rhai script or coprocessor that makes a network call inflates this number, which
+   is easily mistaken for a router regression.
 3. **It is meaningless when the router is CPU-bound.** Keep CPU under ~50%; above
    that you are measuring scheduling delay, not router work.
 
@@ -202,8 +201,8 @@ timeseries errors = sum(dynatrace.subgraph.errors),
 
 **4. Read it.**
 **Good**: zero, or a small constant from known partial-data paths.
-**Bad**: a spike isolated to one subgraph. Pair with the trace view filtered on
-the same subgraph to read the actual error extensions.
+**Bad**: a spike isolated to one subgraph. Pair with the trace view filtered on the
+same subgraph to read the error extensions.
 
 **5. Where it lives.** Tile *Subgraph Errors by Subgraph* in the **Errors** section
 of the generated dashboard. Already included — no action needed if you imported it.
@@ -347,9 +346,9 @@ timeseries queued = max(apollo.router.compute_jobs.queued),
 
 **Good**: near zero. Jobs start as soon as they arrive.
 **Bad**: climbing — the pool is saturated and every queued job is pure added
-latency. This is a **leading indicator that CPU-based autoscaling will miss**: a
-large operator has published a load test where query-planning p99 went from 12.6 ms
-to 7.8 s between 130k and 140k req/min while **CPU stayed flat**.
+latency. This is a **leading indicator that CPU-based autoscaling does not detect**.
+Published load testing shows query-planning p99 degrading from milliseconds to
+seconds across a narrow increase in throughput while CPU utilisation stays flat.
 
 > **Do not chart `apollo.router.compute_jobs.active_jobs` on Dynatrace.** It is an
 > UpDownCounter, and UpDownCounters under **delta** temporality report negative or
@@ -357,7 +356,7 @@ to 7.8 s between 130k and 140k req/min while **CPU stayed flat**.
 > restarts. Dynatrace requires delta, so the two are fundamentally incompatible.
 > The same applies to `apollo.router.opened.subscriptions` and
 > `apollo.router.cache.redis.connections`. Keep all three out of dashboards and
-> alerts on a delta pipeline (TSH-18972, TSH-18444, TSH-19729).
+> alerts on a delta pipeline.
 
 ```dql
 timeseries {
