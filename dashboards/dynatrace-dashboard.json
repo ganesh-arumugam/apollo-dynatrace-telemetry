@@ -259,12 +259,12 @@
     "22": {
       "type": "markdown",
       "title": "",
-      "markdown": "**Cache & query planning** — the cache tiles stay empty unless router\ncaching is enabled (query-plan cache metrics need `supergraph.query_planning`\ncache config; response cache needs entity caching: GraphOS Router\nEnterprise + Redis)"
+      "markdown": "**Saturation** — is the router itself under pressure?"
     },
     "23": {
       "type": "data",
-      "title": "Cache Hits vs Misses (requires query-plan caching)",
-      "query": "timeseries {\n  hits = sum(apollo.router.cache.hit.time.count),\n  misses = sum(apollo.router.cache.miss.time.count)\n}, by: {kind}, filter: {service.name == \"apollo-router\"}",
+      "title": "Open Connections — avg / max",
+      "query": "timeseries {\n  avg_open = avg(apollo.router.open_connections),\n  max_open = max(apollo.router.open_connections)\n}, filter: {service.name == \"apollo-router\"}",
       "visualization": "lineChart",
       "visualizationSettings": {
         "chartSettings": {
@@ -277,8 +277,8 @@
     },
     "24": {
       "type": "data",
-      "title": "Response Cache by Subgraph (requires entity caching)",
-      "query": "timeseries cache = sum(apollo.router.response.cache), by: {subgraph.name, cache.hit}, filter: {service.name == \"apollo-router\"}",
+      "title": "Compute Job Queue — waiting vs running",
+      "query": "timeseries {\n  queued = max(apollo.router.compute_jobs.queued),\n  active = max(apollo.router.compute_jobs.active_jobs)\n}, filter: {service.name == \"apollo-router\"}",
       "visualization": "lineChart",
       "visualizationSettings": {
         "chartSettings": {
@@ -291,8 +291,8 @@
     },
     "25": {
       "type": "data",
-      "title": "Query Planning — p50 / p95 / p99 (spans)",
-      "query": "fetch spans\n| filter service.name == \"apollo-router\" and span.name == \"query_planning\"\n| makeTimeseries {\n    p50 = percentile(duration, 50),\n    p95 = percentile(duration, 95),\n    p99 = percentile(duration, 99)\n  }",
+      "title": "Compute Jobs — queue wait vs execution (avg)",
+      "query": "timeseries {\n  queue_wait = avg(apollo.router.compute_jobs.queue.wait.duration),\n  execution = avg(apollo.router.compute_jobs.execution.duration)\n}, filter: {service.name == \"apollo-router\"}",
       "visualization": "lineChart",
       "visualizationSettings": {
         "chartSettings": {
@@ -305,8 +305,8 @@
     },
     "26": {
       "type": "data",
-      "title": "Query Plans Generated",
-      "query": "timeseries plans = count(apollo.router.query_planning.plan.duration), filter: {service.name == \"apollo-router\"}",
+      "title": "Compute Job Duration by Job Type (avg)",
+      "query": "timeseries duration = avg(apollo.router.compute_jobs.duration), by: {job.type}, filter: {service.name == \"apollo-router\"}",
       "visualization": "lineChart",
       "visualizationSettings": {
         "chartSettings": {
@@ -320,9 +320,70 @@
     "27": {
       "type": "markdown",
       "title": "",
-      "markdown": "**Connector HTTP** — only populated when Apollo Connectors are in use"
+      "markdown": "**Cache & query planning** — the cache tiles stay empty unless router\ncaching is enabled (query-plan cache metrics need `supergraph.query_planning`\ncache config; response cache needs entity caching: GraphOS Router\nEnterprise + Redis)"
     },
     "28": {
+      "type": "data",
+      "title": "Cache Hits vs Misses (requires query-plan caching)",
+      "query": "timeseries {\n  hits = sum(apollo.router.cache.hit.time.count),\n  misses = sum(apollo.router.cache.miss.time.count)\n}, by: {kind}, filter: {service.name == \"apollo-router\"}",
+      "visualization": "lineChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "legend": {
+            "hidden": false,
+            "position": "BOTTOM"
+          }
+        }
+      }
+    },
+    "29": {
+      "type": "data",
+      "title": "Response Cache by Subgraph (requires entity caching)",
+      "query": "timeseries cache = sum(apollo.router.response.cache), by: {subgraph.name, cache.hit}, filter: {service.name == \"apollo-router\"}",
+      "visualization": "lineChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "legend": {
+            "hidden": false,
+            "position": "BOTTOM"
+          }
+        }
+      }
+    },
+    "30": {
+      "type": "data",
+      "title": "Query Planning — p50 / p95 / p99 (spans)",
+      "query": "fetch spans\n| filter service.name == \"apollo-router\" and span.name == \"query_planning\"\n| makeTimeseries {\n    p50 = percentile(duration, 50),\n    p95 = percentile(duration, 95),\n    p99 = percentile(duration, 99)\n  }",
+      "visualization": "lineChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "legend": {
+            "hidden": false,
+            "position": "BOTTOM"
+          }
+        }
+      }
+    },
+    "31": {
+      "type": "data",
+      "title": "Query Plans Generated",
+      "query": "timeseries plans = count(apollo.router.query_planning.plan.duration), filter: {service.name == \"apollo-router\"}",
+      "visualization": "lineChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "legend": {
+            "hidden": false,
+            "position": "BOTTOM"
+          }
+        }
+      }
+    },
+    "32": {
+      "type": "markdown",
+      "title": "",
+      "markdown": "**Connector HTTP** — only populated when Apollo Connectors are in use"
+    },
+    "33": {
       "type": "data",
       "title": "Connector p95 Latency by Source (spans)",
       "query": "fetch spans\n| filter service.name == \"apollo-router\" and isNotNull(connector.source.name)\n| makeTimeseries p95 = percentile(duration, 95), by: {connector.source.name}",
@@ -336,7 +397,7 @@
         }
       }
     },
-    "29": {
+    "34": {
       "type": "data",
       "title": "Connector Request Rate by Source",
       "query": "timeseries requests = count(http.client.request.duration), by: {connector.source.name}, filter: {service.name == \"apollo-router\"}",
@@ -350,12 +411,45 @@
         }
       }
     },
-    "30": {
+    "35": {
+      "type": "markdown",
+      "title": "",
+      "markdown": "**Coprocessors** — only populated when a coprocessor is configured\n(`coprocessor.url`); a coprocessor adds a network hop to every request it\nhandles, so its duration is router latency your subgraphs cannot explain"
+    },
+    "36": {
+      "type": "data",
+      "title": "Coprocessor Calls by Stage (requires a coprocessor)",
+      "query": "timeseries calls = sum(apollo.router.operations.coprocessor), by: {coprocessor.stage, coprocessor.succeeded}, filter: {service.name == \"apollo-router\"}",
+      "visualization": "lineChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "legend": {
+            "hidden": false,
+            "position": "BOTTOM"
+          }
+        }
+      }
+    },
+    "37": {
+      "type": "data",
+      "title": "Coprocessor Duration by Stage — avg / max (requires a coprocessor)",
+      "query": "timeseries {\n  avg_duration = avg(apollo.router.operations.coprocessor.duration),\n  max_duration = max(apollo.router.operations.coprocessor.duration)\n}, by: {coprocessor.stage}, filter: {service.name == \"apollo-router\"}",
+      "visualization": "lineChart",
+      "visualizationSettings": {
+        "chartSettings": {
+          "legend": {
+            "hidden": false,
+            "position": "BOTTOM"
+          }
+        }
+      }
+    },
+    "38": {
       "type": "markdown",
       "title": "",
       "markdown": "**Traces & Dependencies** — span- and log-based tiles: top operations,\ndependency map, exemplars, and error logs (span/log-based, not metrics)"
     },
-    "31": {
+    "39": {
       "type": "data",
       "title": "Top GraphQL Operations (by p99)",
       "query": "fetch spans\n| filter service.name == \"apollo-router\" and request.is_root_span == true\n| summarize {\n    requests = count(),\n    failed = countIf(request.is_failed == true),\n    p95 = percentile(duration, 95),\n    p99 = percentile(duration, 99)\n  }, by: {graphql.operation.name}\n| fieldsAdd error_rate_pct = (failed * 100.0) / requests\n| fields graphql.operation.name, requests, error_rate_pct, p95, p99\n| sort p99 desc\n| limit 20",
@@ -367,7 +461,7 @@
         }
       }
     },
-    "32": {
+    "40": {
       "type": "data",
       "title": "Recent Failed Requests (exemplars)",
       "query": "fetch spans\n| filter service.name == \"apollo-router\" and request.is_root_span == true and request.is_failed == true\n| fields start_time, trace.id, graphql.operation.name, http.response.status_code, duration\n| sort start_time desc\n| limit 50",
@@ -379,7 +473,7 @@
         }
       }
     },
-    "33": {
+    "41": {
       "type": "data",
       "title": "Dependencies — Subgraphs & Connectors (by call volume)",
       "query": "fetch spans\n| filter service.name == \"apollo-router\" and span.kind == \"client\"\n| fieldsAdd dependency = coalesce(subgraph.name, connector.source.name, server.address)\n| filter isNotNull(dependency)\n| summarize {\n    calls = count(),\n    avg_duration = avg(duration),\n    p99_duration = percentile(duration, 99)\n  }, by: {dependency}\n| sort calls desc\n| limit 20",
@@ -391,7 +485,7 @@
         }
       }
     },
-    "34": {
+    "42": {
       "type": "data",
       "title": "Router Error Logs (requires log forwarding — see DT022)",
       "query": "fetch logs\n| filter service.name == \"apollo-router\" and loglevel == \"ERROR\"\n| fields timestamp, content\n| sort timestamp desc\n| limit 50",
@@ -588,30 +682,78 @@
     "30": {
       "x": 0,
       "y": 82,
-      "w": 24,
-      "h": 3
+      "w": 12,
+      "h": 6
     },
     "31": {
-      "x": 0,
-      "y": 85,
+      "x": 12,
+      "y": 82,
       "w": 12,
-      "h": 8
+      "h": 6
     },
     "32": {
-      "x": 12,
-      "y": 85,
-      "w": 12,
-      "h": 8
+      "x": 0,
+      "y": 88,
+      "w": 24,
+      "h": 2
     },
     "33": {
       "x": 0,
-      "y": 93,
+      "y": 90,
       "w": 12,
-      "h": 8
+      "h": 6
     },
     "34": {
       "x": 12,
-      "y": 93,
+      "y": 90,
+      "w": 12,
+      "h": 6
+    },
+    "35": {
+      "x": 0,
+      "y": 96,
+      "w": 24,
+      "h": 2
+    },
+    "36": {
+      "x": 0,
+      "y": 98,
+      "w": 12,
+      "h": 6
+    },
+    "37": {
+      "x": 12,
+      "y": 98,
+      "w": 12,
+      "h": 6
+    },
+    "38": {
+      "x": 0,
+      "y": 104,
+      "w": 24,
+      "h": 3
+    },
+    "39": {
+      "x": 0,
+      "y": 107,
+      "w": 12,
+      "h": 8
+    },
+    "40": {
+      "x": 12,
+      "y": 107,
+      "w": 12,
+      "h": 8
+    },
+    "41": {
+      "x": 0,
+      "y": 115,
+      "w": 12,
+      "h": 8
+    },
+    "42": {
+      "x": 12,
+      "y": 115,
       "w": 12,
       "h": 8
     }

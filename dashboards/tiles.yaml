@@ -164,6 +164,44 @@ sections:
           | summarize total = sum(arraySum(cnt)), by: {http.response.status_code}
           | sort total desc
 
+  # Is the router itself the constraint, rather than the graph it fronts? The
+  # compute-job pool runs query parsing and planning; work waiting in its queue is
+  # latency no subgraph is responsible for. All durations are metrics with no span
+  # equivalent, so these report avg/max rather than a percentile that would just
+  # be the average — see docs/percentiles-and-buckets.md.
+  - title: "**Saturation** — is the router itself under pressure?"
+    tiles:
+      - name: Open Connections — avg / max
+        viz: lineChart
+        width: 12
+        query: |
+          timeseries {
+            avg_open = avg(apollo.router.open_connections),
+            max_open = max(apollo.router.open_connections)
+          }, filter: {SERVICE}
+      - name: Compute Job Queue — waiting vs running
+        viz: lineChart
+        width: 12
+        query: |
+          timeseries {
+            queued = max(apollo.router.compute_jobs.queued),
+            active = max(apollo.router.compute_jobs.active_jobs)
+          }, filter: {SERVICE}
+      # The ratio that matters: time queued vs time actually executing. Wait time
+      # climbing while execution stays flat means the pool is the bottleneck.
+      - name: Compute Jobs — queue wait vs execution (avg)
+        viz: lineChart
+        width: 12
+        query: |
+          timeseries {
+            queue_wait = avg(apollo.router.compute_jobs.queue.wait.duration),
+            execution = avg(apollo.router.compute_jobs.execution.duration)
+          }, filter: {SERVICE}
+      - name: Compute Job Duration by Job Type (avg)
+        viz: lineChart
+        width: 12
+        query: 'timeseries duration = avg(apollo.router.compute_jobs.duration), by: {job.type}, filter: {SERVICE}'
+
   # An empty tile should say why it is empty. Query planning always reports; the
   # two cache tiles need router caching turned on, so they are labelled rather
   # than left looking broken.
@@ -218,6 +256,28 @@ sections:
         viz: lineChart
         width: 12
         query: 'timeseries requests = count(http.client.request.duration), by: {connector.source.name}, filter: {SERVICE}'
+
+  # These instruments only exist once a coprocessor is configured — the router
+  # emits nothing otherwise, so the tiles are labelled rather than left looking
+  # broken. The `coprocessor.stage` / `coprocessor.succeeded` attributes are the
+  # documented ones but are unverified here, since this pack runs no coprocessor.
+  - title: |
+      **Coprocessors** — only populated when a coprocessor is configured
+      (`coprocessor.url`); a coprocessor adds a network hop to every request it
+      handles, so its duration is router latency your subgraphs cannot explain
+    tiles:
+      - name: Coprocessor Calls by Stage (requires a coprocessor)
+        viz: lineChart
+        width: 12
+        query: 'timeseries calls = sum(apollo.router.operations.coprocessor), by: {coprocessor.stage, coprocessor.succeeded}, filter: {SERVICE}'
+      - name: Coprocessor Duration by Stage — avg / max (requires a coprocessor)
+        viz: lineChart
+        width: 12
+        query: |
+          timeseries {
+            avg_duration = avg(apollo.router.operations.coprocessor.duration),
+            max_duration = max(apollo.router.operations.coprocessor.duration)
+          }, by: {coprocessor.stage}, filter: {SERVICE}
 
   - title: |
       **Traces & Dependencies** — span- and log-based tiles: top operations,

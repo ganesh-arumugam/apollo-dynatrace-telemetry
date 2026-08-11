@@ -254,7 +254,96 @@ field that needs pagination or a demand-control limit.
 
 ---
 
-## 7. Connectors (only if Apollo Connectors are in use)
+## 7. Saturation — is the router itself the constraint?
+
+The compute-job pool runs query parsing and planning. Work sitting in its queue is
+latency no subgraph is responsible for, which makes this the section to check when
+subgraph timings look fine and clients still complain.
+
+Durations here are metrics with no span equivalent, so they report avg/max rather
+than a percentile — `percentile()` on a metric needs a `rollup` that collapses the
+slot to one value first, which returns the average. See
+[percentiles-and-buckets.md](../docs/percentiles-and-buckets.md).
+
+```dql
+timeseries {
+    avg_open = avg(apollo.router.open_connections),
+    max_open = max(apollo.router.open_connections)
+  },
+  filter: {service.name == "apollo-router"}
+```
+
+**Good**: flat, well under whatever your ingress or file-descriptor limit is.
+**Bad**: a rising floor — connections are being held open, not turned over.
+
+```dql
+timeseries {
+    queued = max(apollo.router.compute_jobs.queued),
+    active = max(apollo.router.compute_jobs.active_jobs)
+  },
+  filter: {service.name == "apollo-router"}
+```
+
+**Good**: `queued` near zero. Jobs start as soon as they arrive.
+**Bad**: `queued` climbing while `active` is flat — the pool is saturated and every
+queued job is added latency.
+
+```dql
+timeseries {
+    queue_wait = avg(apollo.router.compute_jobs.queue.wait.duration),
+    execution = avg(apollo.router.compute_jobs.execution.duration)
+  },
+  filter: {service.name == "apollo-router"}
+```
+
+**Good**: wait time far below execution time. On an idle router, wait is tens of
+microseconds.
+**Bad**: wait approaching or exceeding execution — the router is spending more time
+waiting for a worker than doing the work.
+
+```dql
+timeseries duration = avg(apollo.router.compute_jobs.duration),
+  by: {job.type},
+  filter: {service.name == "apollo-router"}
+```
+
+**Good**: `query_planning` and `query_parsing` both steady. `job.type` is the
+dimension that tells you which of the two is growing.
+**Bad**: `query_planning` rising — usually large or newly-deployed operations
+missing from the plan cache.
+
+---
+
+## 8. Coprocessors (only if `coprocessor.url` is configured)
+
+A coprocessor adds a network hop to every request it handles, so its duration is
+router latency that no subgraph can explain. These instruments do not exist until a
+coprocessor is configured.
+
+```dql
+timeseries calls = sum(apollo.router.operations.coprocessor),
+  by: {coprocessor.stage, coprocessor.succeeded},
+  filter: {service.name == "apollo-router"}
+```
+
+```dql
+timeseries {
+    avg_duration = avg(apollo.router.operations.coprocessor.duration),
+    max_duration = max(apollo.router.operations.coprocessor.duration)
+  },
+  by: {coprocessor.stage},
+  filter: {service.name == "apollo-router"}
+```
+
+**Good**: a single stage, low and flat, with `coprocessor.succeeded: true`.
+**Bad**: failures at any stage, or a duration comparable to total request latency —
+the coprocessor is now the bottleneck. The `coprocessor.stage` and
+`coprocessor.succeeded` attributes are the documented ones but are unverified here,
+since this pack runs no coprocessor.
+
+---
+
+## 9. Connectors (only if Apollo Connectors are in use)
 
 ```dql
 timeseries p95 = percentile(http.client.request.duration, 95),
@@ -268,7 +357,7 @@ API, and it will show up as router latency to the client.
 
 ---
 
-## 8. Log events (Dynatrace Log Management)
+## 10. Log events (Dynatrace Log Management)
 
 Log records arrive via the separate `logging.otlp` exporter (or, in the collector
 topology, a `filelog` receiver tailing the router's stdout). If this returns
@@ -285,7 +374,7 @@ fetch logs
 
 ---
 
-## 9. Trace correlation
+## 11. Trace correlation
 
 ```dql
 fetch spans
@@ -301,7 +390,7 @@ root trace id.
 
 ---
 
-## 10. Span- and log-based tiles (no metric behind them)
+## 12. Span- and log-based tiles (no metric behind them)
 
 Everything above is a `timeseries` query against a metric. The tiles in this
 section read `fetch spans` / `fetch logs` instead — the DQL equivalent of the
@@ -362,7 +451,7 @@ fetch spans
 ```
 
 The dashboard-native version of "click a spike, land on a trace":
-each row carries a `trace.id` a reader can paste into trace search (§9) or the
+each row carries a `trace.id` a reader can paste into trace search (§11) or the
 Dynatrace UI to open the PurePath directly, rather than only seeing an
 aggregate failure count.
 
@@ -400,7 +489,7 @@ fetch logs
 | limit 50
 ```
 
-Same query family as §8, now embedded directly in the dashboard instead of
+Same query family as §10, now embedded directly in the dashboard instead of
 living only in this doc. Empty when spans/metrics show errors means the
 logging pipeline is missing — see `DT017` and the "Router logs do not reach
 Dynatrace directly" note in the README.

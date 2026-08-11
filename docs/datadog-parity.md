@@ -22,6 +22,49 @@ worth knowing before assuming a config translates one-for-one.
 | The dashboard template you import | `dashboards/tiles.yaml` → `dashboards/dynatrace-dashboard.json`, imported with `scripts/import_dashboard.sh` |
 | — | Extras with no Datadog counterpart: `scripts/validate_dynatrace.py`, `scripts/validate_collector.py`, `harness/`, `scripts/verify_ingest.sh` |
 
+## Dashboard coverage against the Datadog template
+
+Compared tile by tile against
+[`datadog/dashboard-template.json`](https://github.com/apollographql/apm-templates/blob/main/datadog/dashboard-template.json):
+
+| | Datadog template | This pack |
+|---|---:|---:|
+| Sections | 14 | 10 |
+| Tiles with queries | 95 | 33 |
+| Distinct router metrics | 23 | 22 |
+
+Metric coverage is close. The tile count differs because the Datadog template
+slices the same metrics far more finely — by hop, by status class, and as a
+duration distribution per subgraph and per connector source.
+
+Covered here after review: compute jobs (queue depth, queue-wait vs execution,
+duration by `job.type`), open connections, and coprocessor calls and duration.
+
+Still only on the Datadog side, deliberately:
+
+- **Subscriptions** — `opened.subscriptions`, `skipped.event.count`. Add these if
+  the graph serves subscriptions.
+- **Supportability** — `lifecycle.license`, `schema.load.duration`,
+  `uplink.fetch.duration.seconds`. Useful when diagnosing startup and uplink, less
+  so on a traffic dashboard.
+- **Query planning warmup** — `warmup.duration`, `plan.evaluated_plans`. This pack
+  charts `plan.duration` only.
+- **Container/Host** — Dynatrace has native host and process views, so repeating
+  them inside a router dashboard adds little.
+- **Sentinel metrics** — a Datadog-specific monitoring-the-monitoring pattern with
+  no direct equivalent.
+
+Two structural differences worth knowing:
+
+- The Datadog template organizes by **hop** (Client→Router, then Router→Backend,
+  each with traffic/characteristics/latency). This pack organizes by **concern**
+  (overview, traffic, latency, errors, saturation).
+- The Datadog template charts `http.server.request.duration` heavily. This pack
+  does not chart it at all: Datadog computes percentiles server-side from the real
+  distribution, while `percentile()` over the same metric in DQL requires a
+  `rollup` that returns the average. Latency percentiles here come from spans
+  instead — see [`percentiles-and-buckets.md`](percentiles-and-buckets.md).
+
 ## What changes between the two backends
 
 Most of the router config carries over. These are the parts that don't:
