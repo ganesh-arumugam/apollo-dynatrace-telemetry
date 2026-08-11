@@ -95,15 +95,32 @@ by subgraph timeouts, leaking subscriptions, or a stalled coprocessor.
 
 ```dql
 timeseries {
-    p50 = percentile(apollo.router.overhead, 50, rollup: avg),
-    p99 = percentile(apollo.router.overhead, 99, rollup: avg)
+    avg_overhead = avg(apollo.router.overhead),
+    max_overhead = max(apollo.router.overhead)
   },
-  filter: {service.name == "apollo-router"}
+  filter: {service.name == "apollo-router" and subgraph.active_requests == "false"}
 ```
 
 `apollo.router.overhead` excludes time waiting on subgraphs and connectors, so it
 isolates parsing, validation, query planning, response composition, and plugin
-(Rhai/coprocessor) execution.
+(Rhai/coprocessor) execution. Units are **seconds**.
+
+**Three footguns, all undocumented upstream. Get any of them wrong and the number
+is quietly meaningless:**
+
+1. **Filter `subgraph.active_requests == "false"`.** Without it you average
+   router-only time together with router-while-waiting-on-a-subgraph, which is the
+   opposite of what this metric is for. The value is a **string** — `== false`
+   unquoted matches nothing and the chart goes silently empty.
+2. **Coprocessor time and plugin network calls are counted inside overhead.** A
+   Rhai script or coprocessor that makes a network call inflates this number, and
+   customers have mistaken that for router regression.
+3. **It is meaningless when the router is CPU-bound.** Keep CPU under ~50%; above
+   that you are measuring scheduling delay, not router work.
+
+Reported as avg/max rather than percentiles: no span carries overhead, and
+`percentile()` on a metric needs a `rollup` that returns the average. See
+[percentiles-and-buckets.md](../docs/percentiles-and-buckets.md).
 
 **Good**: single-digit milliseconds, flat.
 **Bad**: rising overhead with flat subgraph latency = the router is the
@@ -134,15 +151,58 @@ timeseries lat = avg(http.client.request.duration),
 
 ### Subgraph errors, by subgraph
 
+Selected from [`docs/metrics.md` §2](../docs/metrics.md#2-is-it-the-router-or-a-subgraph).
+`custom` — the router does not emit this one until you declare it.
+
+**1. Enable it.** From
+[`instruments.router.yaml`](../templates/instruments.router.yaml), under
+`telemetry.instrumentation.instruments.subgraph`:
+
+```yaml
+dynatrace.subgraph.errors:
+  value: unit
+  type: counter
+  unit: "{error}"
+  description: "Subgraph responses that carried GraphQL errors"
+  condition:
+    eq:
+      - true
+      - subgraph_on_graphql_error: true
+  attributes:
+    subgraph.name: true          # the attribution that makes it actionable
+```
+
+Then `python3 scripts/validate_dynatrace.py your-router.yaml` before restarting —
+`DT012`/`DT013` catch naming and type mistakes that the router accepts silently.
+
+**2. Confirm it arrived.** Do this before building a chart, because a counter that
+has never incremented is never created at all — "no series" is ambiguous between
+*misconfigured* and *nothing has failed yet*:
+
+```dql
+timeseries n = sum(dynatrace.subgraph.errors, scalar: true),
+  filter: {service.name == "apollo-router"}, from: -2h
+```
+
+No result and you expected errors? Send a request you know fails and re-check.
+Metrics need one batch interval plus ingest lag — usually under a minute, and
+`scripts/verify_ingest.sh` waits for it rather than reporting a false negative.
+
+**3. Chart it.**
+
 ```dql
 timeseries errors = sum(dynatrace.subgraph.errors),
   by: {subgraph.name},
   filter: {service.name == "apollo-router"}
 ```
 
+**4. Read it.**
 **Good**: zero, or a small constant from known partial-data paths.
 **Bad**: a spike isolated to one subgraph. Pair with the trace view filtered on
 the same subgraph to read the actual error extensions.
+
+**5. Where it lives.** Tile *Subgraph Errors by Subgraph* in the **Errors** section
+of the generated dashboard. Already included — no action needed if you imported it.
 
 ---
 
@@ -277,16 +337,23 @@ timeseries {
 **Bad**: a rising floor — connections are being held open, not turned over.
 
 ```dql
-timeseries {
-    queued = max(apollo.router.compute_jobs.queued),
-    active = max(apollo.router.compute_jobs.active_jobs)
-  },
+timeseries queued = max(apollo.router.compute_jobs.queued),
   filter: {service.name == "apollo-router"}
 ```
 
-**Good**: `queued` near zero. Jobs start as soon as they arrive.
-**Bad**: `queued` climbing while `active` is flat — the pool is saturated and every
-queued job is added latency.
+**Good**: near zero. Jobs start as soon as they arrive.
+**Bad**: climbing — the pool is saturated and every queued job is pure added
+latency. This is a **leading indicator that CPU-based autoscaling will miss**: a
+large operator has published a load test where query-planning p99 went from 12.6 ms
+to 7.8 s between 130k and 140k req/min while **CPU stayed flat**.
+
+> **Do not chart `apollo.router.compute_jobs.active_jobs` on Dynatrace.** It is an
+> UpDownCounter, and UpDownCounters under **delta** temporality report negative or
+> corrupted values — one dropped delta corrupts the running total until the router
+> restarts. Dynatrace requires delta, so the two are fundamentally incompatible.
+> The same applies to `apollo.router.opened.subscriptions` and
+> `apollo.router.cache.redis.connections`. Keep all three out of dashboards and
+> alerts on a delta pipeline (TSH-18972, TSH-18444, TSH-19729).
 
 ```dql
 timeseries {

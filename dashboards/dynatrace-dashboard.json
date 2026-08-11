@@ -159,8 +159,8 @@
     },
     "14": {
       "type": "data",
-      "title": "Router Overhead — avg / max (excludes downstream wait)",
-      "query": "timeseries {\n  avg_overhead = avg(apollo.router.overhead),\n  max_overhead = max(apollo.router.overhead)\n}, filter: {service.name == \"apollo-router\"}",
+      "title": "Router Overhead — avg / max (router time only)",
+      "query": "timeseries {\n  avg_overhead = avg(apollo.router.overhead),\n  max_overhead = max(apollo.router.overhead)\n}, filter: {service.name == \"apollo-router\" and subgraph.active_requests == \"false\"}",
       "visualization": "lineChart",
       "visualizationSettings": {
         "chartSettings": {
@@ -277,8 +277,8 @@
     },
     "24": {
       "type": "data",
-      "title": "Compute Job Queue — waiting vs running",
-      "query": "timeseries {\n  queued = max(apollo.router.compute_jobs.queued),\n  active = max(apollo.router.compute_jobs.active_jobs)\n}, filter: {service.name == \"apollo-router\"}",
+      "title": "Compute Job Queue Depth",
+      "query": "timeseries queued = max(apollo.router.compute_jobs.queued), filter: {service.name == \"apollo-router\"}",
       "visualization": "lineChart",
       "visualizationSettings": {
         "chartSettings": {

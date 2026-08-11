@@ -119,14 +119,24 @@ sections:
               p95 = percentile(duration, 95),
               p99 = percentile(duration, 99)
             }
-      - name: Router Overhead — avg / max (excludes downstream wait)
+      # THREE FOOTGUNS ON THIS METRIC. It is the one customers reach for to answer
+      # "is it us or the subgraph", and all three are undocumented upstream:
+      #
+      #  1. Filter `subgraph.active_requests == "false"` or you are averaging
+      #     router-only time together with router-while-waiting-on-a-subgraph.
+      #     The value is a STRING: `== false` unquoted matches nothing and the tile
+      #     goes silently empty.
+      #  2. Coprocessor time and any plugin network call land INSIDE overhead, so a
+      #     coprocessor or a Rhai script that makes a call inflates this number.
+      #  3. It is meaningless when the router is CPU-bound. Keep CPU under ~50%.
+      - name: Router Overhead — avg / max (router time only)
         viz: lineChart
         width: 12
         query: |
           timeseries {
             avg_overhead = avg(apollo.router.overhead),
             max_overhead = max(apollo.router.overhead)
-          }, filter: {SERVICE}
+          }, filter: {{SERVICE_EXPR} and subgraph.active_requests == "false"}
       - name: Subgraph p95 Latency by Subgraph (spans)
         viz: lineChart
         width: 12
@@ -179,14 +189,17 @@ sections:
             avg_open = avg(apollo.router.open_connections),
             max_open = max(apollo.router.open_connections)
           }, filter: {SERVICE}
-      - name: Compute Job Queue — waiting vs running
+      # `apollo.router.compute_jobs.active_jobs` is deliberately NOT charted here.
+      # It is an UpDownCounter, and UpDownCounters under delta temporality report
+      # negative or corrupted values — a single dropped delta corrupts the running
+      # total until the router restarts. Dynatrace requires delta, so the two are
+      # incompatible. Same applies to `apollo.router.opened.subscriptions` and
+      # `apollo.router.cache.redis.connections`: keep all three out of dashboards
+      # and alerts on a delta pipeline.
+      - name: Compute Job Queue Depth
         viz: lineChart
         width: 12
-        query: |
-          timeseries {
-            queued = max(apollo.router.compute_jobs.queued),
-            active = max(apollo.router.compute_jobs.active_jobs)
-          }, filter: {SERVICE}
+        query: 'timeseries queued = max(apollo.router.compute_jobs.queued), filter: {SERVICE}'
       # The ratio that matters: time queued vs time actually executing. Wait time
       # climbing while execution stays flat means the pool is the bottleneck.
       - name: Compute Jobs — queue wait vs execution (avg)
@@ -261,6 +274,11 @@ sections:
   # emits nothing otherwise, so the tiles are labelled rather than left looking
   # broken. The `coprocessor.stage` / `coprocessor.succeeded` attributes are the
   # documented ones but are unverified here, since this pack runs no coprocessor.
+  #
+  # KNOWN LIMITATION (TSH-23276, open with engineering): the GraphQL operation name
+  # is not propagated into the Router→coprocessor span, so Dynatrace shows only `/`.
+  # Coprocessor cost therefore cannot be attributed to an operation, and these
+  # metric tiles are the only coprocessor view available until that is fixed.
   - title: |
       **Coprocessors** — only populated when a coprocessor is configured
       (`coprocessor.url`); a coprocessor adds a network hop to every request it
