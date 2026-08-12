@@ -50,10 +50,10 @@ status-code one: use `apollo.router.graphql_error`.
 so it returns the average — p50, p90 and p99 come back identical. See
 [percentiles-and-buckets.md](percentiles-and-buckets.md).
 
-**UpDownCounters are unusable on Dynatrace.** `compute_jobs.active_jobs`,
-`opened.subscriptions` and `cache.redis.connections` report negative or corrupted
-values under delta temporality — one dropped delta corrupts the total until
-restart. Dynatrace requires delta, so these are excluded throughout.
+**UpDownCounters are unusable on Dynatrace.** `compute_jobs.active_jobs` and
+`opened.subscriptions` report negative or corrupted values under delta
+temporality — one dropped delta corrupts the total until restart. Dynatrace
+requires delta, so these are excluded throughout.
 
 **Some metrics Dynatrace refuses outright** — see [section 15](#15-metrics-dynatrace-rejects).
 
@@ -83,11 +83,17 @@ the first row is the single most cross-validated insight in this document.
 | `dynatrace.graphql.operations` | How many GraphQL operations, by type? Diverges from request count under batching. | counter | `declare` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
 | `apollo.router.operations` | Total operations processed | counter | `default` | metric |
 | `apollo.router.operations.lexical_tokens` | Token count per operation — a proxy for query size | histogram | `default` | metric |
-| `apollo.router.operations.recursion` | Query nesting depth. Sudden growth is often an abusive or generated query. | histogram | `default` | metric |
+| `apollo.router.operations.recursion` | Query parser recursion depth. Sudden growth is often an abusive or generated query. | histogram | `default` | metric |
 
 Three numbers here count three different things — HTTP requests, GraphQL
 operations, and Studio's reported operations. They will not match, and that is not
 a bug: batching, subscriptions and sampling drive them apart.
+
+**`apollo.router.graphql_error` carries a `code` attribute** — the same
+mechanism GraphQL uses in its `errors[].extensions.code` field. Filtering on it
+is how you separate a schema-validation failure from an authorization rejection
+from a genuine resolver error, and it is what makes the authorization signal in
+[section 8](#8-auth) work without a dedicated counter.
 
 ---
 
@@ -141,8 +147,8 @@ utilisation stays flat.
 |---|---|---|---|---|
 | `apollo.router.cache.hit.time` / `.miss.time` by `kind` | Hit rate for query-plan, automatic persisted query and introspection caches | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
 | `apollo.router.cache.size` by `kind` | How full is each cache? | gauge | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
-| `apollo.router.cache.storage.estimated_size` | Bytes held. Pair with hit rate before resizing. | gauge | `default` | metric |
-| `apollo.router.cache.redis.connections` | — | UpDownCounter | **excluded** | unusable under delta |
+| `apollo.router.cache.storage.estimated_size` | Bytes held **for the in-memory query-planner cache specifically** — not response/entity caching, which has its own storage. | gauge | `default` | metric |
+| `apollo.router.cache.redis.clients` | Is Redis reachable? A gauge, not the UpDownCounter this section used to warn about — that was the old name, `apollo.router.cache.redis.connections`, before it was renamed. | gauge | `requires Redis-backed cache` | metric |
 
 `kind` is the dimension that makes this section useful — without it you cannot tell
 a cold query-plan cache from an APQ miss. Confirmed values on a live tenant:
@@ -165,20 +171,26 @@ Requires GraphOS Router Enterprise and a Redis-backed cache store.
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `apollo.router.response.cache` by `subgraph.name`, `entity.type`, `cache.hit` | Is entity caching earning its keep, and for which subgraph and type? | counter | `requires entity caching` | metric |
+| `apollo.router.response.cache` by `subgraph.name`, `graphql.type.name`, `cache.hit` | Is entity caching earning its keep, and for which subgraph and type? | counter | `requires entity caching` | metric |
+| `apollo.router.cache.redis.errors` / `.reconnection` / `.unresponsive` | Is Redis itself the problem? | counter | `requires Redis-backed cache` | metric |
+| `apollo.router.operations.response_cache.fetch.error` / `.insert.error` | Is the cache read or write path failing, specifically? | counter | `requires entity caching` | metric |
 
-`subgraph.name` and `entity.type` are declared attributes — add them explicitly in
-[`instruments.router.yaml`](../templates/instruments.router.yaml), the same file as
-every other metric here. `cache.hit` is attached by the router automatically.
+`subgraph.name` and `graphql.type.name` (the entity type — not `entity.type`,
+which is not a valid attribute name on this instrument) are declared attributes.
+Add them in [`instruments.router.yaml`](../templates/instruments.router.yaml),
+the same file as every other metric here — `subgraph.name` needs the selector
+form (`subgraph.name: { subgraph_name: true }`) on this particular instrument, a
+plain `true` is rejected. `cache.hit` is attached by the router automatically.
 
-**Two failure modes this metric cannot show you:**
+**Two failure modes worth knowing:**
 
-- **Redis availability.** Whether a Redis outage degrades latency or produces
-  errors depends on whether the cache is configured fail-open or fail-closed.
-  Either way, `apollo.router.cache.redis.connections` (section 5) cannot be
-  charted reliably to diagnose it — it is an UpDownCounter, unusable under delta
-  temporality. Watch subgraph latency and error rate instead during a Redis
-  incident.
+- **Redis availability has real counters**, not just an inference from subgraph
+  latency. `cache.redis.errors`, `.reconnection` and `.unresponsive` are plain
+  counters and safe under delta temporality — they're the direct signal for a
+  Redis incident. Whether an outage then shows up as *latency* or as *errors* on
+  the response-cache path still depends on whether the cache is configured
+  fail-open or fail-closed, so read those two response_cache.*.error counters
+  alongside the Redis ones to tell which.
 - **Cache-key correctness.** A misconfigured cache key can serve one tenant's
   data to another. No metric detects this; it is a config-review concern, not a
   monitoring one.
@@ -214,39 +226,52 @@ release. Uplink fetch success is the earlier and more useful signal to watch.
 
 If a metric naming the rejection specifically is needed, none exists to declare —
 it would have to come from a custom Rhai script or coprocessor observing the
-router's rejection response.
+router's rejection response. This is a known gap, not an oversight: a customer
+request for exactly this ([router#6864](https://github.com/apollographql/router/issues/6864))
+has been open since February 2025, and an Apollo engineer's reply on the
+community forum confirms no such instrument exists today. Worth checking that
+issue before building a custom workaround, in case it has shipped since.
 
 ---
 
 ## 8. Auth
 
 Authentication (is this caller who they claim to be) and authorization (are they
-allowed to see this field) fail differently, and only one of the two is even
-partially observable today.
+allowed to see this field) both have a real signal on default configuration —
+one from a dedicated counter, one from `graphql_error`'s `code` attribute.
 
-**Authentication.** No dedicated failure counter exists in the router's
-instrumentation config. Build one the same way as `dynatrace.router.server.errors`
-in section 1, filtered to `401`/`403` instead of `5xx`:
+**Authentication.**
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `dynatrace.router.requests` by `http.response.status_code` | Are callers failing authentication? | counter | `declare` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
+| `apollo.router.operations.authentication.jwt` | Are JWT validations failing, and why? | counter | `default`, Router v2.6.0+ | metric |
 
-**The silent failure:** JWKS unreachable → no token validates → every request
-401s, and from the outside it looks like a client-side bug rather than an
-infrastructure one. Pair the counter above with uplink-style reachability
-checking on the JWKS endpoint if one is not already in place.
+Fires on every JWT validation, success and failure, carrying
+`authentication.jwt.failed` (boolean) and — on a failure —
+`authentication.jwt.failure_code` (`CANNOT_DECODE_JWT`, `INVALID_AUDIENCE`,
+`CANNOT_FIND_KID`, and others). This directly covers the JWKS-unreachable case:
+a JWKS outage shows up as a run of `CANNOT_FIND_KID`, distinguishing "the
+identity provider is down" from "this caller sent a bad token" — a distinction
+the `401` status code alone cannot make.
 
-Some router versions expose `apollo.router.operations.jwt` (deprecated in favour
-of `apollo.router.operations.authentication.jwt`, removed at 3.0). Neither name
-could be confirmed in this router's own configuration schema, so check your
-router's version-specific instrument reference before relying on either.
+The older name, `apollo.router.operations.jwt`, is superseded by the one above.
+Which router version drops the old name entirely is not confirmed here — check
+your own router's changelog before depending on either name across an upgrade.
 
-**Authorization directives** (`@authenticated`, `@requiresScopes`) fail worse than
-authentication: a filtered field returns `null`, not an error. **Nothing
-increments.** Error rate stays flat while the response is silently incomplete.
-There is currently no metric-based way to observe this — it requires inspecting
-the GraphQL response or a span for the removed field, not a chart.
+**Authorization directives** (`@authenticated`, `@requiresScopes`). On default
+configuration, a filtered field is **not** silent: the router adds an entry to
+the GraphQL `errors` array with code `UNAUTHORIZED_FIELD_OR_TYPE`
+(`authorization.directives.errors.response` defaults to `errors`), so it is
+visible through the metric already in this list:
+
+| Metric | Answers | Type | Get it by | Where |
+|---|---|---|---|---|
+| `apollo.router.graphql_error` filtered to `code == "UNAUTHORIZED_FIELD_OR_TYPE"` | Is authorization removing fields from responses? | counter | `default` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
+
+The silent case is narrower than it first looks: it only happens if
+`authorization.directives.errors.response` has been explicitly set to
+`disabled`. On that configuration, nothing increments and a chart cannot see
+it — worth confirming which setting is in place before assuming either way.
 
 ---
 

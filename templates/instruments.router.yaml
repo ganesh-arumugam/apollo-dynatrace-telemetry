@@ -26,7 +26,10 @@ telemetry:
         http.server.request.duration:
           attributes:
             http.response.status_code: true
-            graphql.operation.name: false   # (HIGH CARD) enable only to debug
+            # graphql.operation.name is not a valid attribute on this
+            # instrument (router config validation rejects it) — it only
+            # exists at supergraph scope. See dynatrace.graphql.operations
+            # below, which is where the (HIGH CARD) toggle actually belongs.
         http.server.request.body.size: true
         http.server.response.body.size: true
 
@@ -105,5 +108,10 @@ telemetry:
       cache:
         apollo.router.response.cache:
           attributes:
-            entity.type: true
-            subgraph.name: true
+            # graphql.type.name, not entity.type — that name does not exist
+            # on this instrument. subgraph.name needs the selector form here
+            # (a plain `true` is rejected); most other instruments in this
+            # file accept subgraph.name as a bare boolean, this one does not.
+            graphql.type.name: true
+            subgraph.name:
+              subgraph_name: true

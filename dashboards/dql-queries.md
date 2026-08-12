@@ -122,10 +122,12 @@ Also the shape for `http.server.active_requests` and
 `apollo.router.compute_jobs.queued`.
 
 **Do not use this shape on an UpDownCounter.**
-`apollo.router.compute_jobs.active_jobs`, `apollo.router.opened.subscriptions` and
-`apollo.router.cache.redis.connections` report negative or corrupted values under
-delta temporality, because one dropped delta corrupts the running total until the
-router restarts. Dynatrace requires delta, so these cannot be charted reliably.
+`apollo.router.compute_jobs.active_jobs` and `apollo.router.opened.subscriptions`
+report negative or corrupted values under delta temporality, because one dropped
+delta corrupts the running total until the router restarts. Dynatrace requires
+delta, so these cannot be charted reliably. (`apollo.router.cache.redis.connections`
+used to be in this list under an older name — it's `apollo.router.cache.redis.clients`
+now, a gauge, and charts fine.)
 
 ---
 
