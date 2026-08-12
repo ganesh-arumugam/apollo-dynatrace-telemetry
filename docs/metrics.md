@@ -22,9 +22,10 @@ histogram buckets are configured separately, in
 | `requires X` | does not exist until a router feature is enabled |
 | `span` | not a metric — read it from spans |
 
-**Verified** means observed arriving in a real Dynatrace tenant from a real router
-(39 of the `apollo.router.*` family). `⚠ unverified` means it has not been seen
-here — confirm it arrives (step 2 of its recipe) before building on it.
+**Verified** means confirmed arriving in a Dynatrace tenant from a live router
+(39 of the `apollo.router.*` family). Metrics tagged `requires X` do not exist
+until that feature is configured — confirm each one arrives (step 2 of its
+recipe) before building a chart or alert on it.
 
 **Type** decides the aggregation. This is the one thing you cannot copy blindly
 when reusing a query from another row:
@@ -140,7 +141,7 @@ utilisation stays flat.
 | `apollo.router.cache.hit.time` / `.miss.time` by `kind` | Hit rate for query-plan, APQ and introspection caches | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
 | `apollo.router.cache.size` by `kind` | How full is each cache? | gauge | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
 | `apollo.router.cache.storage.estimated_size` | Bytes held. Pair with hit rate before resizing. | gauge | `default` | metric |
-| `apollo.router.response.cache` by `subgraph.name`, `cache.hit` | Is entity caching earning its keep? | counter | `requires entity caching` | metric · ⚠ unverified |
+| `apollo.router.response.cache` by `subgraph.name`, `cache.hit` | Is entity caching earning its keep? | counter | `requires entity caching` | metric |
 | `apollo.router.cache.redis.connections` | — | UpDownCounter | **excluded** | unusable under delta |
 
 `kind` is the dimension that makes this section useful — without it you cannot tell
@@ -153,8 +154,8 @@ self-heals; **not** recovering means warm-up is misconfigured.
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `apollo.router.operations.coprocessor` by `coprocessor.stage` | How often is the coprocessor called, and does it succeed? | counter | `requires coprocessor.url` | metric · ⚠ unverified |
-| `apollo.router.operations.coprocessor.duration` by `coprocessor.stage` | How much latency does it add per stage? | histogram | `requires coprocessor.url` | metric · ⚠ unverified |
+| `apollo.router.operations.coprocessor` by `coprocessor.stage` | How often is the coprocessor called, and does it succeed? | counter | `requires coprocessor.url` | metric |
+| `apollo.router.operations.coprocessor.duration` by `coprocessor.stage` | How much latency does it add per stage? | histogram | `requires coprocessor.url` | metric |
 
 A coprocessor adds a network hop to every request it handles, and **its time is
 counted inside `apollo.router.overhead`** — so a slow coprocessor looks like router
@@ -220,9 +221,9 @@ leak in your graph. Both growing together is the real thing.
 
 ## 9. Feature-gated
 
-None of these exist until the feature is on, and **none are verified here** — this
-pack runs no PQ list, auth, connectors or subscriptions. Confirm arrival before
-building on any of them.
+None of these exist until the corresponding feature is configured — a router
+with no persisted queries, no auth, no connectors and no subscriptions emits none
+of them. Confirm each one arrives before building a chart or alert on it.
 
 | Area | What to watch | Silent failure to guard against |
 |---|---|---|
@@ -325,8 +326,9 @@ cardinalities. The metric is free; the attribute is the bill.
 SDK enforces **2,000 datapoints per metric stream** (SDK 0.24.0, shipped in Router
 v2.10.0). On overflow the router does not error — it **strips the attributes**,
 keeps the values, sets `otel.metric.overflow=true`, and increments
-`apollo.router.telemetry.metrics.cardinality_overflow` (⚠ unverified here — it is
-only created once an overflow actually happens). The limit applies per export
+`apollo.router.telemetry.metrics.cardinality_overflow` (created only once an
+overflow actually happens, so its absence does not confirm cardinality is
+within bounds). The limit applies per export
 batch. Attributes on **histograms** are the worst case, because you pay per bucket.
 
 The router's own defaults do not emit high-cardinality attributes, so overflow is

@@ -253,7 +253,7 @@ out of the router's critical path between releases.
 | `apollo.router.operations.coprocessor` | B, by `coprocessor.stage` | one stage, low and flat, succeeding | failures at any stage |
 | `apollo.router.operations.coprocessor.duration` | C, by `coprocessor.stage` | well under your latency budget | comparable to total request latency: the coprocessor is the bottleneck |
 
-Both require a configured coprocessor and are unverified here. The operation name is
+Both require a configured coprocessor to exist at all. The operation name is
 not propagated into the Router→coprocessor span, so Dynatrace shows only `/` and
 coprocessor cost cannot be attributed to an operation.
 
