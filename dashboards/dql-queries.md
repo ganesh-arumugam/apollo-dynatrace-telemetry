@@ -173,7 +173,7 @@ waits for it rather than reporting a false negative.
 
 Some metrics never arrive because Dynatrace rejects the type at ingest, which leaves
 no error in the router log — see
-[`docs/metrics.md` §12](../docs/metrics.md#12-metrics-dynatrace-rejects).
+[`docs/metrics.md` §15](../docs/metrics.md#15-metrics-dynatrace-rejects).
 
 **3. Chart it** using shape B.
 

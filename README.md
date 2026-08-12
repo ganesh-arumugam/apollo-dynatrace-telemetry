@@ -23,7 +23,7 @@ validators, and a test harness that verifies the export path without a tenant.
 | Question | Where it's answered |
 |---|---|
 | Which router metrics exist, and which should we collect? | [`docs/metrics.md`](docs/metrics.md) — every metric, the question it answers, what it costs to enable, and which Dynatrace refuses |
-| How do we monitor whether a subgraph is reachable? | [`docs/metrics.md`](docs/metrics.md#11-subgraph-health--the-gap) — no product answer exists; the workarounds and their trade-offs |
+| How do we monitor whether a subgraph is reachable? | [`docs/metrics.md`](docs/metrics.md#14-subgraph-health--the-gap) — no product answer exists; the workarounds and their trade-offs |
 | What are histogram buckets, and why is my p95 a guess? | [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md) — the mechanism behind the recommendations, with a worked example |
 | Why doesn't the p95 in Dynatrace match GraphOS Studio? | [`docs/studio-vs-dynatrace-latency.md`](docs/studio-vs-dynatrace-latency.md) — the two pipelines, which numbers are comparable, and how to read percentiles correctly |
 | Can we run Prometheus and Dynatrace at the same time? | [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md) — yes; config, what's shared, what isn't |

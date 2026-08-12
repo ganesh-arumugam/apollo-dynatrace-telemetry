@@ -4,8 +4,9 @@ A menu, not a prescription. Each row names a metric, the question it answers, an
 what it costs to get. When a row looks useful, follow its recipe link for the
 Dynatrace steps: enable it, confirm it arrived, chart it, read it.
 
-Sections follow Apollo's own APM template grouping so this stays one list rather
-than a competing one. Sections 8–11 cover ground that grouping does not.
+Sections follow Apollo's own APM template grouping where it applies. Persisted
+queries, response caching, auth, memory, connectors, subscriptions, subgraph
+health and the Dynatrace-rejection list cover ground that grouping does not.
 
 ## How to read the columns
 
@@ -54,7 +55,7 @@ so it returns the average — p50, p90 and p99 come back identical. See
 values under delta temporality — one dropped delta corrupts the total until
 restart. Dynatrace requires delta, so these are excluded throughout.
 
-**Some metrics Dynatrace refuses outright** — see [section 12](#12-metrics-dynatrace-rejects).
+**Some metrics Dynatrace refuses outright** — see [section 15](#15-metrics-dynatrace-rejects).
 
 ---
 
@@ -138,19 +139,118 @@ utilisation stays flat.
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `apollo.router.cache.hit.time` / `.miss.time` by `kind` | Hit rate for query-plan, APQ and introspection caches | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
+| `apollo.router.cache.hit.time` / `.miss.time` by `kind` | Hit rate for query-plan, automatic persisted query and introspection caches | histogram | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
 | `apollo.router.cache.size` by `kind` | How full is each cache? | gauge | `default` | metric · [how to read it](../dashboards/dql-queries.md#saturation-planning-and-cache) |
 | `apollo.router.cache.storage.estimated_size` | Bytes held. Pair with hit rate before resizing. | gauge | `default` | metric |
-| `apollo.router.response.cache` by `subgraph.name`, `cache.hit` | Is entity caching earning its keep? | counter | `requires entity caching` | metric |
 | `apollo.router.cache.redis.connections` | — | UpDownCounter | **excluded** | unusable under delta |
 
 `kind` is the dimension that makes this section useful — without it you cannot tell
-a cold query-plan cache from an APQ miss. A cold cache after a deploy is normal and
-self-heals; **not** recovering means warm-up is misconfigured.
+a cold query-plan cache from an APQ miss. Confirmed values on a live tenant:
+`query planner`, `APQ`, `introspection`. **Automatic persisted queries and
+query-plan caching are both covered by this section already** — neither needs a
+metric of its own. (Persisted queries with an enforced manifest — safelisting —
+are a different mechanism from APQ and are covered separately in
+[section 7](#7-persisted-queries).)
+
+A cold cache after a deploy is normal and self-heals; **not** recovering means
+warm-up is misconfigured.
 
 ---
 
-## 6. Coprocessor
+## 6. Response and entity caching
+
+A distinct feature from the caches in section 5: this caches subgraph
+**responses**, whole or per-field via `@cacheControl`, rather than query plans.
+Requires GraphOS Router Enterprise and a Redis-backed cache store.
+
+| Metric | Answers | Type | Get it by | Where |
+|---|---|---|---|---|
+| `apollo.router.response.cache` by `subgraph.name`, `entity.type`, `cache.hit` | Is entity caching earning its keep, and for which subgraph and type? | counter | `requires entity caching` | metric |
+
+`subgraph.name` and `entity.type` are declared attributes — add them explicitly in
+[`instruments.router.yaml`](../templates/instruments.router.yaml), the same file as
+every other metric here. `cache.hit` is attached by the router automatically.
+
+**Two failure modes this metric cannot show you:**
+
+- **Redis availability.** Whether a Redis outage degrades latency or produces
+  errors depends on whether the cache is configured fail-open or fail-closed.
+  Either way, `apollo.router.cache.redis.connections` (section 5) cannot be
+  charted reliably to diagnose it — it is an UpDownCounter, unusable under delta
+  temporality. Watch subgraph latency and error rate instead during a Redis
+  incident.
+- **Cache-key correctness.** A misconfigured cache key can serve one tenant's
+  data to another. No metric detects this; it is a config-review concern, not a
+  monitoring one.
+
+---
+
+## 7. Persisted queries
+
+Two different features are both called "persisted queries," and they fail
+differently:
+
+- **Automatic persisted queries (APQ)** — the router caches operations by hash on
+  first sight, no registration required. Already covered in section 5 under
+  `kind: APQ`.
+- **Persisted queries with an enforced manifest (safelisting)** — a pre-registered
+  operation list delivered from GraphOS via uplink. This is the feature described
+  below, and it has no dedicated instrument.
+
+There is no router-emitted metric for a persisted-query rejection. What exists
+instead:
+
+| Metric | Answers | Type | Get it by | Where |
+|---|---|---|---|---|
+| `apollo.router.uplink.fetch.count.total` | Is the manifest being delivered at all? | counter | `default` | metric · [section 10](#10-diagnostic-sentinels--the-silent-failures) |
+| `apollo.router.uplink.fetch.duration.seconds` | Is delivery degrading before it fails outright? | histogram | `default` | metric · [section 10](#10-diagnostic-sentinels--the-silent-failures) |
+| `dynatrace.router.requests` by `http.response.status_code` | Is client-facing rejection volume rising? | counter | `declare` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
+
+**The silent failure is upstream of the rejection, not the rejection itself.**
+Uplink stops delivering the manifest → the router keeps serving a stale list
+indefinitely → a new client release's operation IDs are rejected, while overall
+request volume and error rate barely move because the failure is scoped to one
+release. Uplink fetch success is the earlier and more useful signal to watch.
+
+If a metric naming the rejection specifically is needed, none exists to declare —
+it would have to come from a custom Rhai script or coprocessor observing the
+router's rejection response.
+
+---
+
+## 8. Auth
+
+Authentication (is this caller who they claim to be) and authorization (are they
+allowed to see this field) fail differently, and only one of the two is even
+partially observable today.
+
+**Authentication.** No dedicated failure counter exists in the router's
+instrumentation config. Build one the same way as `dynatrace.router.server.errors`
+in section 1, filtered to `401`/`403` instead of `5xx`:
+
+| Metric | Answers | Type | Get it by | Where |
+|---|---|---|---|---|
+| `dynatrace.router.requests` by `http.response.status_code` | Are callers failing authentication? | counter | `declare` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
+
+**The silent failure:** JWKS unreachable → no token validates → every request
+401s, and from the outside it looks like a client-side bug rather than an
+infrastructure one. Pair the counter above with uplink-style reachability
+checking on the JWKS endpoint if one is not already in place.
+
+Some router versions expose `apollo.router.operations.jwt` (deprecated in favour
+of `apollo.router.operations.authentication.jwt`, removed at 3.0). Neither name
+could be confirmed in this router's own configuration schema, so check your
+router's version-specific instrument reference before relying on either.
+
+**Authorization directives** (`@authenticated`, `@requiresScopes`) fail worse than
+authentication: a filtered field returns `null`, not an error. **Nothing
+increments.** Error rate stays flat while the response is silently incomplete.
+There is currently no metric-based way to observe this — it requires inspecting
+the GraphQL response or a span for the removed field, not a chart.
+
+---
+
+## 9. Coprocessor
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
@@ -170,7 +270,7 @@ available until that is addressed upstream.
 
 ---
 
-## 7. Diagnostic sentinels — the silent failures
+## 10. Diagnostic sentinels — the silent failures
 
 Nothing in this section shows up in RED metrics. Every one of them fails quietly
 while dashboards stay green.
@@ -200,7 +300,7 @@ The name also differs by exporter: `apollo_router_pipelines` on Prometheus.
 
 ---
 
-## 8. Memory (internals)
+## 11. Memory (internals)
 
 You will not look at these until you are chasing a leak or sizing a pod. Included
 for completeness; skip on a first pass.
@@ -219,26 +319,25 @@ leak in your graph. Both growing together is the real thing.
 
 ---
 
-## 9. Feature-gated
+## 12. Connectors and subscriptions
 
-None of these exist until the corresponding feature is configured — a router
-with no persisted queries, no auth, no connectors and no subscriptions emits none
-of them. Confirm each one arrives before building a chart or alert on it.
+Neither exists until the corresponding feature is configured. Confirm each one
+arrives before building a chart or alert on it.
 
-| Area | What to watch | Silent failure to guard against |
-|---|---|---|
-| **Persisted queries** | PQ rejection rate; uplink manifest fetch success | Uplink stops delivering the manifest → the router serves a stale PQ list → a new client release is rejected while every dashboard stays green. With safelisting enforced, a miss is a blocked request |
-| **Auth** | Auth failure rate; JWKS fetch health | JWKS unreachable → no token validates → everything 401s, and it looks like a client problem |
-| **Authorization directives** | Filtered-field counts | `@authenticated`/`@requiresScopes` remove fields **silently** — users get `null`, not an error, so error rates stay flat while the product is broken |
-| **Connectors** | `http.client.request.duration` by `connector.source.name` | A REST source degrading surfaces as router latency |
-| **Subscriptions** | `opened.subscriptions`, `skipped.event.count` | `opened.subscriptions` is an UpDownCounter — unusable under delta |
+| Metric | Answers | Type | Get it by | Where |
+|---|---|---|---|---|
+| `http.client.request.duration` by `connector.source.name` | Is a REST source degrading? Surfaces as router latency if not split out. | histogram | `requires Apollo Connectors` | metric |
+| `apollo.router.operations.subscriptions.terminated.client` | How often do clients terminate subscriptions? | counter | `requires subscriptions` | metric |
+| `apollo.router.opened.subscriptions` | — | UpDownCounter | **excluded** | unusable under delta |
 
-Note `apollo.router.operations.jwt` is deprecated in favour of
-`apollo.router.operations.authentication.jwt`, and the old name is removed at 3.0.
+A `skipped.event.count`-style instrument for dropped subscription events has been
+referenced in secondary material but could not be confirmed against this router's
+own configuration schema — check your router's version-specific instrument
+reference before building on that name.
 
 ---
 
-## 10. Container and host
+## 13. Container and host
 
 **Not router-emitted.** Dynatrace collects these itself via OneAgent or the
 Kubernetes operator, so there is nothing to configure in the router — but the data
@@ -250,12 +349,12 @@ meaning anything, because you are measuring scheduling delay rather than router
 work. Apollo's own deployment autoscales at 75% CPU; their sizing guidance suggests
 no CPU limit at all, to avoid throttling.
 
-Memory: prefer `jemalloc.resident` from section 8 over container RSS, since it
+Memory: prefer `jemalloc.resident` from section 11 over container RSS, since it
 attributes to the router process rather than the pod.
 
 ---
 
-## 11. Subgraph health — the gap
+## 14. Subgraph health — the gap
 
 **The most-requested signal that does not exist.** `/health` tells you the router
 pod is alive. It says nothing about whether subgraphs are reachable, so a router
@@ -285,7 +384,7 @@ cardinality.
 
 ---
 
-## 12. Metrics Dynatrace rejects
+## 15. Metrics Dynatrace rejects
 
 Dynatrace does not accept every OTLP metric type the router emits. Rejected metrics
 fail **at ingest**, not in the router, so the router logs look clean and the metric
@@ -333,9 +432,10 @@ batch. Attributes on **histograms** are the worst case, because you pay per buck
 
 The router's own defaults do not emit high-cardinality attributes, so overflow is
 almost always caused by attributes someone added. That is the argument for leaving
-`graphql.operation.name` off: persisted queries do bound the operation set, but a PQ
-manifest can comfortably exceed 2,000 entries, so PQs do not make the attribute
-safe — they only make the ceiling easier to estimate.
+`graphql.operation.name` off: persisted queries ([section 7](#7-persisted-queries))
+do bound the operation set, but a PQ manifest can comfortably exceed 2,000
+entries, so PQs do not make the attribute safe — they only make the ceiling
+easier to estimate.
 
 **And the remedy is currently broken.** The documented lever for pruning metrics —
 `views` / metric dropping — **does not accept wildcards** despite the docs showing
