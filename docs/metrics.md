@@ -4,6 +4,10 @@ A menu, not a prescription. Each row names a metric, the question it answers, an
 what it costs to get. When a row looks useful, follow its recipe link for the
 Dynatrace steps: enable it, confirm it arrived, chart it, read it.
 
+Based on Apollo Router 2.17, the latest release. Instrument names and behavior
+can change between major versions — check your own router's version if
+something here doesn't match what you see.
+
 Sections follow Apollo's own APM template grouping where it applies. Persisted
 queries, response caching, auth, memory, connectors, subscriptions, subgraph
 health and the Dynatrace-rejection list cover ground that grouping does not.
@@ -151,8 +155,13 @@ utilisation stays flat.
 | `apollo.router.cache.redis.clients` | Is Redis reachable? A gauge, not the UpDownCounter this section used to warn about — that was the old name, `apollo.router.cache.redis.connections`, before it was renamed. | gauge | `requires Redis-backed cache` | metric |
 
 `kind` is the dimension that makes this section useful — without it you cannot tell
-a cold query-plan cache from an APQ miss. Confirmed values on a live tenant:
-`query planner`, `APQ`, `introspection`. **Automatic persisted queries and
+a cold query-plan cache from an APQ miss. A live tenant, re-checked directly for
+this note, consistently returns `query planner`, `APQ`, `introspection` —
+uppercase `APQ`. Apollo's own documentation gives it lowercase, `apq`. DQL string
+filters are case-sensitive, so a query written against the documented casing will
+silently return nothing against the observed one. Check your own tenant's actual
+value with a `by: {kind}` query before filtering on either spelling, or match
+case-insensitively. **Automatic persisted queries and
 query-plan caching are both covered by this section already** — neither needs a
 metric of its own. (Persisted queries with an enforced manifest — safelisting —
 are a different mechanism from APQ and are covered separately in
@@ -206,31 +215,42 @@ differently:
   first sight, no registration required. Already covered in section 5 under
   `kind: APQ`.
 - **Persisted queries with an enforced manifest (safelisting)** — a pre-registered
-  operation list delivered from GraphOS via uplink. This is the feature described
-  below, and it has no dedicated instrument.
+  operation list. This is the feature described below.
 
-There is no router-emitted metric for a persisted-query rejection. What exists
-instead:
+**Verified**, by turning safelisting on (`require_id: true`) against a local
+manifest and sending a request with an operation ID that isn't in it:
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `apollo.router.uplink.fetch.count.total` | Is the manifest being delivered at all? | counter | `default` | metric · [section 10](#10-diagnostic-sentinels--the-silent-failures) |
-| `apollo.router.uplink.fetch.duration.seconds` | Is delivery degrading before it fails outright? | histogram | `default` | metric · [section 10](#10-diagnostic-sentinels--the-silent-failures) |
-| `dynatrace.router.requests` by `http.response.status_code` | Is client-facing rejection volume rising? | counter | `declare` | metric · [how to read it](../dashboards/dql-queries.md#traffic-and-health) |
+| `apollo.router.operations.persisted_queries` by `persisted_queries.not_found` | Was an operation rejected because its ID isn't in the manifest? | counter | `requires persisted queries` | metric |
+| `apollo.router.uplink.fetch.count.total` / `.duration.seconds` | Is the manifest being delivered at all? | counter / histogram | `default` | metric · [section 10](#10-diagnostic-sentinels--the-silent-failures) |
 
-**The silent failure is upstream of the rejection, not the rejection itself.**
-Uplink stops delivering the manifest → the router keeps serving a stale list
-indefinitely → a new client release's operation IDs are rejected, while overall
-request volume and error rate barely move because the failure is scoped to one
-release. Uplink fetch success is the earlier and more useful signal to watch.
+`persisted_queries.not_found = true` arrived in Dynatrace exactly as expected
+from that test. This is the counter to use for "how many requests are being
+rejected for an unrecognized operation ID" — it exists, and it charts.
 
-If a metric naming the rejection specifically is needed, none exists to declare —
-it would have to come from a custom Rhai script or coprocessor observing the
-router's rejection response. This is a known gap, not an oversight: a customer
-request for exactly this ([router#6864](https://github.com/apollographql/router/issues/6864))
-has been open since February 2025, and an Apollo engineer's reply on the
-community forum confirms no such instrument exists today. Worth checking that
-issue before building a custom workaround, in case it has shipped since.
+**A second, narrower gap remains — attribution, not existence.** The same
+counter also carries `persisted_queries.safelist.rejected.unknown`,
+`.safelist.enforcement_skipped` and `.logged` for a related but different
+scenario (a freeform request evaluated under audit/logging mode, rather than
+an ID lookup that failed) — confirmed in the router's own source, not
+independently tested here, since triggering it needs a different
+configuration than the one above. None of these attributes carry which
+*operation* or *subgraph* was involved — only that a rejection happened. That
+gap is tracked upstream: [router#6864](https://github.com/apollographql/router/issues/6864)
+is a still-open request for exactly `operation_name` and `subgraph` on this
+signal, and the requester's own description — "we currently have a dumber
+visualization that simply shows the count of unknown operations" — confirms
+the count-level signal already exists; it's the per-operation detail that
+doesn't. If attribution matters more than the count, that issue is worth
+reading before building a Rhai/coprocessor workaround for it.
+
+**The silent failure is still upstream of the rejection.** Uplink stops
+delivering the manifest → the router keeps serving a stale list indefinitely
+→ a new client release's operation IDs are rejected, while overall request
+volume and error rate barely move because the failure is scoped to one
+release. Uplink fetch success is the earlier signal, and worth watching
+alongside the rejection counter rather than instead of it.
 
 ---
 
@@ -244,19 +264,24 @@ one from a dedicated counter, one from `graphql_error`'s `code` attribute.
 
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
-| `apollo.router.operations.authentication.jwt` | Are JWT validations failing, and why? | counter | `default`, Router v2.6.0+ | metric |
+| `apollo.router.operations.authentication.jwt` | Are JWT validations failing, and why? | counter | `requires JWT auth` | metric |
 
-Fires on every JWT validation, success and failure, carrying
-`authentication.jwt.failed` (boolean) and — on a failure —
-`authentication.jwt.failure_code` (`CANNOT_DECODE_JWT`, `INVALID_AUDIENCE`,
-`CANNOT_FIND_KID`, and others). This directly covers the JWKS-unreachable case:
-a JWKS outage shows up as a run of `CANNOT_FIND_KID`, distinguishing "the
-identity provider is down" from "this caller sent a bad token" — a distinction
-the `401` status code alone cannot make.
+**Verified**, by actually enabling JWT auth against an unreachable JWKS
+endpoint and sending a request: `authentication.jwt.failed = true` arrived in
+Dynatrace as expected. `authentication.jwt.failure_code` did not — every one
+of five test failures (all `CANNOT_FIND_KID`, since the JWKS was unreachable)
+came back with no value for that attribute in this setup. Documentation lists
+`CANNOT_DECODE_JWT`, `INVALID_AUDIENCE` and `CANNOT_FIND_KID` as the failure
+codes this attribute should carry; treat that as accurate for the attribute's
+existence and unverified for whether it actually populates in your
+configuration until you check.
+
+Either way, `.failed = true` alone already covers the case this section cares
+about: a run of JWT failures distinguishes "the identity provider is having a
+problem" from "this caller sent a bad token," which the `401` status code
+alone cannot.
 
 The older name, `apollo.router.operations.jwt`, is superseded by the one above.
-Which router version drops the old name entirely is not confirmed here — check
-your own router's changelog before depending on either name across an upgrade.
 
 **Authorization directives** (`@authenticated`, `@requiresScopes`). On default
 configuration, a filtered field is **not** silent: the router adds an entry to
@@ -386,8 +411,8 @@ pod is alive. It says nothing about whether subgraphs are reachable, so a router
 can report healthy while the graph is unusable.
 
 This is a recurring request from teams operating federated graphs at scale. It is
-logged with Apollo, with no current implementation timeline; circuit breaking in
-Router v3 is the longer-term direction.
+logged with Apollo, with no current implementation timeline; circuit breaking is
+on the router's longer-term roadmap.
 
 The gap this leaves is not theoretical. Edge health checks that resolve addresses
 rather than names will report healthy pods while DNS routing fails intermittently,
@@ -447,8 +472,8 @@ cardinalities. The metric is free; the attribute is the bill.
 | `graphql.document` | unbounded, and may contain PII | never. Rule `DT016` flags it. |
 
 **There is a hard cardinality ceiling, and it is not configurable.** The OTel Rust
-SDK enforces **2,000 datapoints per metric stream** (SDK 0.24.0, shipped in Router
-v2.10.0). On overflow the router does not error — it **strips the attributes**,
+SDK enforces **2,000 datapoints per metric stream**. On overflow the router does
+not error — it **strips the attributes**,
 keeps the values, sets `otel.metric.overflow=true`, and increments
 `apollo.router.telemetry.metrics.cardinality_overflow` (created only once an
 overflow actually happens, so its absence does not confirm cardinality is
