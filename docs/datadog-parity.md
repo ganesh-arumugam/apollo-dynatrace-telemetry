@@ -31,7 +31,7 @@ Compared tile by tile against
 |---|---:|---:|
 | Sections | 14 | 10 |
 | Tiles with queries | 95 | 33 |
-| Distinct router metrics | 23 | 22 |
+| Distinct router metrics | 23 | 21 |
 
 Metric coverage is close. The tile count differs because the Datadog template
 slices the same metrics far more finely — by hop, by status class, and as a
