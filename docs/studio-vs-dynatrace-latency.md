@@ -4,6 +4,10 @@ Both describe the same router, over two independent pipelines. **Request counts
 match exactly. Latency matches too — but only if you read it from spans.** The
 differences below are all explainable; none of them mean telemetry is broken.
 
+This doc compares the *numbers*. For what each platform can do that the other
+can't — and what to build where —
+[studio-vs-dynatrace-capabilities.md](studio-vs-dynatrace-capabilities.md).
+
 ## What differs
 
 | | GraphOS Studio | Dynatrace |

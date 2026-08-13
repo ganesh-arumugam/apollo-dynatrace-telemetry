@@ -7,6 +7,8 @@ validators, and a test harness that verifies the export path without a tenant.
 - **Getting started** — [Quickstart](#quickstart--see-it-work-end-to-end)
 - **Comparing numbers with GraphOS Studio** —
   [`docs/studio-vs-dynatrace-latency.md`](docs/studio-vs-dynatrace-latency.md)
+- **Standardizing on Dynatrace — what stays in Studio** —
+  [`docs/studio-vs-dynatrace-capabilities.md`](docs/studio-vs-dynatrace-capabilities.md)
 - **Coming from the Datadog template** —
   [`docs/datadog-parity.md`](docs/datadog-parity.md)
 - **Getting the right tokens** —
@@ -34,6 +36,7 @@ validators, and a test harness that verifies the export path without a tenant.
 | How do we monitor whether a subgraph is reachable? | [`docs/metrics.md`](docs/metrics.md#14-subgraph-health--the-gap) — no product answer exists; the workarounds and their trade-offs |
 | What are histogram buckets, and why is my p95 a guess? | [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md) — the mechanism behind the recommendations, with a worked example |
 | Why doesn't the p95 in Dynatrace match GraphOS Studio? | [`docs/studio-vs-dynatrace-latency.md`](docs/studio-vs-dynatrace-latency.md) — the two pipelines, which numbers are comparable, and how to read percentiles correctly |
+| If we standardize on Dynatrace, what do we lose from Studio? | [`docs/studio-vs-dynatrace-capabilities.md`](docs/studio-vs-dynatrace-capabilities.md) — what each holds that the other cannot, and what to build where |
 | Can we run Prometheus and Dynatrace at the same time? | [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md) — yes; config, what's shared, what isn't |
 | What does `temporality: delta` actually mean, and does it affect our data? | [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md#cumulative-on-one-side-delta-on-the-other--both-correct) — the same counter, two transports, both correct |
 | We already use the Datadog template — what's different here? | [`docs/datadog-parity.md`](docs/datadog-parity.md) |
@@ -106,6 +109,7 @@ docs/
   metrics.md                       # every router metric: why, cost to enable, where
   rules.md                         # every DT###/DTC### rule: symptom, mechanism, fix
   studio-vs-dynatrace-latency.md   # comparing GraphOS Studio and Dynatrace numbers
+  studio-vs-dynatrace-capabilities.md  # what each holds that the other cannot
   percentiles-and-buckets.md       # how percentiles, buckets and rollup actually work
 templates/
   # Start here — the exporter config for direct-to-Dynatrace

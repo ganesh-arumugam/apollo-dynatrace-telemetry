@@ -500,18 +500,10 @@ drop actually took effect.
 
 ---
 
-## What Studio holds that Dynatrace cannot
+## Where GraphOS Studio fits
 
-Not a metrics question, but it decides what you build where.
-
-| Capability | Why an APM cannot replace it |
-|---|---|
-| Field-level usage | which fields each client uses — needed for safe deprecation |
-| Schema checks against real traffic | CI gating on breaking changes |
-| Operation signature normalization | Studio groups functionally identical operations; Dynatrace groups by span name |
-| PQ manifest | the list lives in GraphOS |
-
-And the converse: **Studio cannot alert.** An external tool is mandatory for
-production alerting. Studio Insights also does not consume your OTLP metrics — it
-is a separate channel, and usage reporting to it is sampled. This is a common source of
-confusion when the two are compared directly.
+Not a metrics question, but it decides what you build where — so it has its own
+doc: [studio-vs-dynatrace-capabilities.md](studio-vs-dynatrace-capabilities.md),
+what Studio holds that Dynatrace cannot (field-level usage, schema checks,
+signature normalization, the PQ manifest) and the converse — starting with the
+fact that Studio cannot alert, which is why this repo exists.
