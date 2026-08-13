@@ -4,25 +4,29 @@ Export Apollo Router telemetry to Dynatrace: router config templates for both
 topologies, a curated instruments set, a ready-to-import dashboard, config
 validators, and a test harness that verifies the export path without a tenant.
 
-- **Getting started** — [Quickstart](#quickstart--see-it-work-end-to-end)
-- **Comparing numbers with GraphOS Studio** —
-  [`docs/studio-vs-dynatrace-latency.md`](docs/studio-vs-dynatrace-latency.md)
-- **Standardizing on Dynatrace — what stays in Studio** —
-  [`docs/studio-vs-dynatrace-capabilities.md`](docs/studio-vs-dynatrace-capabilities.md)
-- **Coming from the Datadog template** —
-  [`docs/datadog-parity.md`](docs/datadog-parity.md)
-- **Getting the right tokens** —
-  [`docs/dynatrace-credentials.md`](docs/dynatrace-credentials.md)
-- **Keeping Prometheus alongside Dynatrace** —
-  [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md)
-- **Which metrics to collect, and why** —
-  [`docs/metrics.md`](docs/metrics.md)
-- **Reading the metrics: what's good, what's concerning, the DQL** —
-  [`dashboards/dql-queries.md`](dashboards/dql-queries.md)
-- **Understanding percentiles and histogram buckets** —
-  [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md)
-- **What every validator rule means, and its fix** —
-  [`docs/rules.md`](docs/rules.md)
+**Set up**
+
+- [Quickstart](#quickstart--see-it-work-end-to-end) — see it work end to end
+- [`docs/dynatrace-credentials.md`](docs/dynatrace-credentials.md) — getting the right tokens
+- [`docs/metrics.md`](docs/metrics.md) — which metrics to collect, and why
+
+**Operate**
+
+- [The dashboard](#the-dashboard) — build from `tiles.yaml`, import in two commands
+- [`dashboards/dql-queries.md`](dashboards/dql-queries.md) — reading the metrics: what's good, what's concerning, the DQL
+- [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md) — understanding percentiles and histogram buckets
+
+**Debug**
+
+- [Validators](#router-rules-dt) — run these first when no data arrives
+- [`docs/rules.md`](docs/rules.md) — what every rule means, and its fix
+
+**Compare and coexist**
+
+- [`docs/studio-vs-dynatrace-latency.md`](docs/studio-vs-dynatrace-latency.md) — comparing numbers with GraphOS Studio
+- [`docs/studio-vs-dynatrace-capabilities.md`](docs/studio-vs-dynatrace-capabilities.md) — standardizing on Dynatrace: what stays in Studio
+- [`docs/datadog-parity.md`](docs/datadog-parity.md) — coming from the Datadog template
+- [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md) — keeping Prometheus alongside Dynatrace
 
 ## Common questions
 
@@ -39,6 +43,7 @@ validators, and a test harness that verifies the export path without a tenant.
 | If we standardize on Dynatrace, what do we lose from Studio? | [`docs/studio-vs-dynatrace-capabilities.md`](docs/studio-vs-dynatrace-capabilities.md) — what each holds that the other cannot, and what to build where |
 | Can we run Prometheus and Dynatrace at the same time? | [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md) — yes; config, what's shared, what isn't |
 | What does `temporality: delta` actually mean, and does it affect our data? | [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md#cumulative-on-one-side-delta-on-the-other--both-correct) — the same counter, two transports, both correct |
+| Is there a ready-made dashboard, and how do we import it? | [The dashboard](#the-dashboard) — built from `dashboards/tiles.yaml`, imported via the Documents API or uploaded by hand |
 | We already use the Datadog template — what's different here? | [`docs/datadog-parity.md`](docs/datadog-parity.md) |
 | Which token do I need, and where do I create it? | [`docs/dynatrace-credentials.md`](docs/dynatrace-credentials.md) |
 | Why are GraphQL errors showing as successful requests? | Spans need `otel.status_code: ERROR` — [`templates/spans.router.yaml`](templates/spans.router.yaml), rule `DT021` |
