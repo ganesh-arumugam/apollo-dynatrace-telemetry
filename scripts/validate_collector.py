@@ -14,6 +14,7 @@ move too. These are the ones that produce a 2xx or a 404 and no data:
   DTC006  every pipeline should batch (unbatched exports hit payload limits)
   DTC007  log pipelines should trim request/response bodies (volume + PII)
   DTC008  endpoint should be https
+  DTC009  retry/queue must not be disabled on the Dynatrace exporter (429s drop data)
 
 Exit code 0 = no errors, 1 = errors (or warnings with --strict), 2 = bad input.
 """
@@ -49,6 +50,7 @@ RULES = {
     "DTC006": "every pipeline should batch",
     "DTC007": "log pipelines should trim request/response bodies",
     "DTC008": "endpoint should be https",
+    "DTC009": "retry/queue must not be disabled on the Dynatrace exporter",
 }
 
 SIGNAL_SUFFIX = re.compile(r"/v1/(traces|metrics|logs)/?$")
@@ -139,6 +141,19 @@ class CollectorValidator:
             if urlparse(probe).scheme not in ("https", ""):
                 self.warn("DTC008", f"{base}.endpoint",
                           "should be https for a Dynatrace tenant.")
+
+        # Dynatrace rate-limits per token (429 with Retry-After). The exporter
+        # helper's retry and queue are on by default and honor it; explicitly
+        # disabling either turns every throttled batch into dropped data.
+        for knob in ("retry_on_failure", "sending_queue"):
+            block = spec.get(knob)
+            if isinstance(block, dict) and block.get("enabled") is False:
+                self.warn("DTC009", f"{base}.{knob}.enabled",
+                          f"{knob} is explicitly disabled. Dynatrace rate-limits "
+                          "per token; without it a 429 means the batch is "
+                          "dropped, not retried. The default is enabled - "
+                          "remove `enabled: false` unless data loss under "
+                          "throttling is acceptable.")
 
         headers = spec.get("headers")
         headers = headers if isinstance(headers, dict) else {}

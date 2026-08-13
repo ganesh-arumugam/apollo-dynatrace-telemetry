@@ -15,14 +15,22 @@ validators, and a test harness that verifies the export path without a tenant.
   [`docs/prometheus-and-dynatrace.md`](docs/prometheus-and-dynatrace.md)
 - **Which metrics to collect, and why** —
   [`docs/metrics.md`](docs/metrics.md)
+- **Reading the metrics: what's good, what's concerning, the DQL** —
+  [`dashboards/dql-queries.md`](dashboards/dql-queries.md)
 - **Understanding percentiles and histogram buckets** —
   [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md)
+- **What every validator rule means, and its fix** —
+  [`docs/rules.md`](docs/rules.md)
 
 ## Common questions
 
 | Question | Where it's answered |
 |---|---|
 | Which router metrics exist, and which should we collect? | [`docs/metrics.md`](docs/metrics.md) — every metric, the question it answers, what it costs to enable, and which Dynatrace refuses |
+| What does a healthy value look like — when should a number worry us? | [`dashboards/dql-queries.md`](dashboards/dql-queries.md#what-each-metric-is-telling-you) — a Good / Concerning read on every charted metric |
+| The config validates, but a metric never shows up in Dynatrace. | [`docs/metrics.md`](docs/metrics.md#15-metrics-dynatrace-rejects) — some types are accepted with a 2xx and refused at ingest |
+| Attributes disappeared from a metric that worked for weeks. | [`docs/metrics.md`](docs/metrics.md#attributes-are-what-cost-you-not-metrics) — the 2,000-datapoint cardinality ceiling strips them silently |
+| Why are p50, p95 and p99 identical in my DQL query? | [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md) — `percentile()` over a rolled-up metric returns the average; use spans |
 | How do we monitor whether a subgraph is reachable? | [`docs/metrics.md`](docs/metrics.md#14-subgraph-health--the-gap) — no product answer exists; the workarounds and their trade-offs |
 | What are histogram buckets, and why is my p95 a guess? | [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md) — the mechanism behind the recommendations, with a worked example |
 | Why doesn't the p95 in Dynatrace match GraphOS Studio? | [`docs/studio-vs-dynatrace-latency.md`](docs/studio-vs-dynatrace-latency.md) — the two pipelines, which numbers are comparable, and how to read percentiles correctly |
@@ -96,6 +104,7 @@ docs/
   datadog-parity.md                # migrating from the Datadog template
   dynatrace-credentials.md         # UI click-path for each token / OAuth client
   metrics.md                       # every router metric: why, cost to enable, where
+  rules.md                         # every DT###/DTC### rule: symptom, mechanism, fix
   studio-vs-dynatrace-latency.md   # comparing GraphOS Studio and Dynatrace numbers
   percentiles-and-buckets.md       # how percentiles, buckets and rollup actually work
 templates/
@@ -116,7 +125,7 @@ templates/
 dashboards/
   tiles.yaml                       # source of truth for the dashboard
   dynatrace-dashboard.json         # generated Platform dashboard (version 17)
-  dql-queries.md                   # one DQL query per instrument, with Good/Bad
+  dql-queries.md                   # one DQL query per instrument, with a Good/Concerning read on each
 scripts/
   validate_dynatrace.py            # DT### rules for router configs
   validate_collector.py            # DTC### rules for collector configs
@@ -128,7 +137,7 @@ harness/
   run_harness.sh                   # static -> mock contract -> live router
   mock_dynatrace.py                # strict mock of Dynatrace's OTLP ingest
   harness.router.yaml              # (subgraphs + supergraph come from demo/)
-tests/                             # 90 tests: rules, mock, dashboard, demo, real configs
+tests/                             # 96 tests: rules, mock, dashboard, demo, real configs
 run-tests.sh
 ```
 
@@ -201,6 +210,13 @@ python3 scripts/build_dashboard.py --service-name my-supergraph
 DT_ENVIRONMENT_ID=abc12345 DT_BEARER_TOKEN=dt0s16... ./scripts/import_dashboard.sh
 ```
 
+The import script also supports OAuth client credentials for CI and service
+accounts (`DT_OAUTH_CLIENT_ID` / `DT_OAUTH_CLIENT_SECRET` / `DT_ACCOUNT_UUID`
+instead of `DT_BEARER_TOKEN`) — click-paths for both credential types in
+[`docs/dynatrace-credentials.md`](docs/dynatrace-credentials.md). No token at
+all? The generated `dashboards/dynatrace-dashboard.json` is a standard
+dashboard document — upload it by hand in the Dashboards app instead.
+
 **Every tile filters on `service.name`.** The default is `apollo-router`; if your
 router reports anything else, the import succeeds and the dashboard is blank. Use
 `--service-name`, or `--service-filter` for something more specific such as
@@ -237,12 +253,17 @@ the 5xx counter. Full explanation of every difference:
 
 ## Router rules (`DT###`)
 
-`python3 scripts/validate_dynatrace.py router.yaml [--mode ...] [--strict] [--json] [--allow-loopback]`
+`python3 scripts/validate_dynatrace.py router.yaml [--mode ...] [--strict] [--json] [--allow-loopback] [--router-bin ./router]`
 
 Exit codes: `0` clean, `1` errors (or warnings with `--strict`), `2` bad input.
 
+This table is the one-line index — [`docs/rules.md`](docs/rules.md) has the
+symptom, mechanism and fix for every rule, and `--json` findings carry a `docs`
+link straight to it.
+
 | Rule | Level | Applies to | Check |
 |---|---|---|---|
+| `DT000` | error | both | the router itself rejects this config — runs `router config validate` when `--router-bin` is given; these rules cover the Dynatrace contract, not the router's full schema |
 | `DT001` | error | direct | otlp `protocol` must be `http` |
 | `DT002` | error | direct | metrics `temporality` must be `delta` |
 | `DT003` | error | direct | endpoint path matches its signal (`/api/v2/otlp/v1/{metrics,traces,logs}`) |
@@ -269,6 +290,10 @@ Exit codes: `0` clean, `1` errors (or warnings with `--strict`), `2` bad input.
 | `DT024` | error | both | unknown condition operator (`gte`/`lte`); only `eq`/`gt`/`lt`/`exists`/`all`/`any`/`not` exist |
 | `DT025` | error | both | `sandbox.enabled` without `supergraph.introspection: true` — router refuses to start |
 | `DT026` | warn | both | histogram buckets too coarse — percentiles above 500ms are interpolation guesses ([why](docs/studio-vs-dynatrace-latency.md)) |
+| `DT027` | warn | both | a `views` entry with a wildcard name silently matches nothing — the drop/rename is a no-op |
+| `DT028` | warn | direct | no `service_name` — the router reports as `unknown_service:router` and every dashboard tile stays blank |
+| `DT029` | warn | both | `graphql.operation.name` on a metric — one series per operation walks into the 2,000-datapoint cardinality ceiling |
+| `DT030` | error | both | `persisted_queries.safelist` with APQ still on — the router refuses to start |
 | `DT101` | error | collector | collector-bound protocol must be `grpc` or `http` |
 | `DT102` | warn | collector | metrics need delta at the router or `cumulativetodelta` in the collector |
 | `DT103` | warn | collector | OTLP/HTTP path should be `/v1/{signal}` if present |
@@ -276,6 +301,8 @@ Exit codes: `0` clean, `1` errors (or warnings with `--strict`), `2` bad input.
 ## Collector rules (`DTC###`)
 
 `python3 scripts/validate_collector.py otel-collector-config.yaml [--strict] [--json]`
+
+Full definitions: [`docs/rules.md`](docs/rules.md#collector-rules-scriptsvalidate_collectorpy).
 
 | Rule | Level | Check |
 |---|---|---|
@@ -287,6 +314,7 @@ Exit codes: `0` clean, `1` errors (or warnings with `--strict`), `2` bad input.
 | `DTC006` | error/warn | pipelines batch, and reference only defined processors |
 | `DTC007` | warn | log pipelines trim request/response bodies (volume + PII) |
 | `DTC008` | warn | endpoint should be `https` |
+| `DTC009` | warn | `retry_on_failure` / `sending_queue` explicitly disabled — a 429 becomes dropped data instead of a retry |
 
 ## The harness
 

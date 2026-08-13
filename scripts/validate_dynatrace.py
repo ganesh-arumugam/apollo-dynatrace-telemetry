@@ -37,6 +37,8 @@ except ImportError:  # pragma: no cover
     sys.exit(2)
 
 RULES = {
+    # --- the router's own schema check (opt-in, needs the binary) ------------
+    "DT000": "the router itself rejects this config (`router config validate`)",
     # --- direct-to-Dynatrace -------------------------------------------------
     "DT001": "otlp protocol must be `http` for Dynatrace (gRPC unsupported)",
     "DT002": "metrics otlp temporality must be `delta` (cumulative is dropped)",
@@ -65,6 +67,10 @@ RULES = {
     "DT020": "spans.default_attribute_requirement_level: recommended adds graphql.document",
     "DT021": "GraphQL errors are HTTP 200 - without otel.status_code they look successful",
     "DT026": "histogram buckets too coarse - percentiles above 500ms are guesses",
+    "DT027": "a `views` entry with a wildcard in its name silently matches nothing",
+    "DT028": "no service_name - the dashboard filters on service.name and shows nothing",
+    "DT029": "operation-name attributes on metrics walk into the cardinality ceiling",
+    "DT030": "persisted-query safelisting requires apq.enabled: false or the router won't start",
     # --- router -> collector -------------------------------------------------
     "DT101": "collector-bound otlp protocol must be `grpc` or `http`",
     "DT102": "collector-bound metrics need delta at the router or a "
@@ -100,7 +106,8 @@ class Finding:
 
     def as_dict(self):
         return {"rule": self.rule, "level": self.level, "path": self.path,
-                "message": self.message}
+                "message": self.message,
+                "docs": f"docs/rules.md#{self.rule.lower()}"}
 
     def __str__(self):
         tag = "ERROR" if self.level == "error" else "WARN "
@@ -151,11 +158,52 @@ class Validator:
 
         self._check_logging(configured)
         self._check_buckets(configured)
+        self._check_views()
         self._check_sampler()
         self._check_instruments()
         self._check_spans()
         self._check_sandbox()
+        self._check_persisted_queries()
         return self.findings
+
+    def _check_views(self):
+        """The documented lever for pruning metrics — `views` — matches exact
+        instrument names only. Wildcards (`*`, `apollo.*`, regex) parse fine and
+        then silently match nothing, so the drop or rename never takes effect
+        and the operator believes the cardinality problem is handled."""
+        metrics = self.exporters.get("metrics")
+        common = metrics.get("common") if isinstance(metrics, dict) else None
+        views = common.get("views") if isinstance(common, dict) else None
+        if not isinstance(views, list):
+            return
+        for i, view in enumerate(views):
+            if not isinstance(view, dict):
+                continue
+            name = view.get("name")
+            if isinstance(name, str) and "*" in name:
+                self.warn("DT027",
+                          f"telemetry.exporters.metrics.common.views[{i}].name",
+                          f"{name!r} contains a wildcard. Views match exact "
+                          "instrument names only - a wildcard matches nothing, "
+                          "silently, so this view is a no-op. Enumerate exact "
+                          "metric names and verify each one took effect.")
+
+    def _check_persisted_queries(self):
+        """`persisted_queries.safelist.enabled: true` while APQ is still on is
+        rejected at startup ("apqs must be disabled to enable safelisting"), so
+        the router never starts and no telemetry is exported at all."""
+        pq = self.cfg.get("persisted_queries")
+        safelist = pq.get("safelist") if isinstance(pq, dict) else None
+        if not (isinstance(safelist, dict) and safelist.get("enabled") is True):
+            return
+        apq = self.cfg.get("apq")
+        apq_enabled = apq.get("enabled") if isinstance(apq, dict) else None
+        if apq_enabled is not False:
+            self.err("DT030", "persisted_queries.safelist.enabled",
+                     "safelisting is on but apq.enabled is not false. The router "
+                     "rejects this pair at startup ('apqs must be disabled to "
+                     "enable safelisting'), so nothing runs and nothing is "
+                     "exported. Add `apq: { enabled: false }`.")
 
     def _check_sandbox(self):
         """`sandbox.enabled: true` without `supergraph.introspection: true` is
@@ -396,8 +444,30 @@ class Validator:
                      "Dynatrace does not support cumulative temporality - "
                      "counters are accepted with a 2xx and then dropped.")
 
+        if signal == "metrics":
+            self._check_service_name()
+
         self._check_endpoint(signal, f"{base}.endpoint", endpoint_s)
         self._check_auth(signal, base, otlp)
+
+    def _check_service_name(self):
+        """Without a service_name the router reports as OTel's fallback
+        (`unknown_service:router`). Every tile in the generated dashboard — and
+        every DQL query in the pack — filters `service.name == "apollo-router"`,
+        so the data arrives and every chart stays blank anyway."""
+        metrics = self.exporters.get("metrics")
+        common = metrics.get("common") if isinstance(metrics, dict) else None
+        common = common if isinstance(common, dict) else {}
+        resource = common.get("resource")
+        resource = resource if isinstance(resource, dict) else {}
+        if not common.get("service_name") and "service.name" not in resource:
+            self.warn("DT028", "telemetry.exporters.metrics.common.service_name",
+                      "not set, so the router exports as `unknown_service:router`. "
+                      "The generated dashboard and the DQL pack filter on "
+                      "service.name == \"apollo-router\" - data will ingest and "
+                      "every chart will stay blank. Set service_name (or "
+                      "resource: {service.name: ...}) to match your dashboard "
+                      "filter.")
 
     # -- router -> collector ----------------------------------------------
     def _check_collector_hop(self, signal: str, base: str, otlp: dict,
@@ -621,6 +691,15 @@ class Validator:
                 self.warn("DT016", f"{path}.attributes.{attr}",
                           "full documents as a metric attribute create unbounded "
                           "cardinality and may carry PII. Keep this off.")
+            if enabled is True and attr in ("graphql.operation.name",
+                                            "subgraph.graphql.operation.name"):
+                self.warn("DT029", f"{path}.attributes.{attr}",
+                          "one series per operation name. The OTel SDK hard-caps "
+                          "a metric stream at 2,000 datapoints and silently "
+                          "strips attributes past it (otel.metric.overflow), and "
+                          "Dynatrace bills per ingested series. Defensible on a "
+                          "small graph; on a busy one, keep it off and use spans "
+                          "for per-operation analysis.")
 
 
 def validate_file(filename: str, *, allow_loopback: bool = False,
@@ -630,6 +709,32 @@ def validate_file(filename: str, *, allow_loopback: bool = False,
     if not isinstance(cfg, dict):
         raise ValueError(f"{filename}: top level YAML is not a mapping")
     return Validator(cfg, allow_loopback=allow_loopback, mode=mode).run()
+
+
+def router_precheck(router_bin: str, filename: str) -> Finding | None:
+    """DT000: hand the file to the router's own validator, which knows the full
+    config schema this script cannot replicate (a real template bug — an invalid
+    attribute on a scoped instrument — once passed every DT rule here and was
+    caught only by `router config validate`). Requires the binary, and any
+    ${env.*} the config references must be set or expansion fails first."""
+    import subprocess
+    try:
+        proc = subprocess.run([router_bin, "config", "validate", filename],
+                              capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        raise SystemExit(f"--router-bin: {router_bin!r} not found or not executable")
+    except subprocess.TimeoutExpired:
+        return Finding("DT000", "error", filename,
+                       f"`{router_bin} config validate` timed out after 120s.")
+    if proc.returncode == 0:
+        return None
+    detail = (proc.stderr or proc.stdout or "").strip()
+    # The router logs a JSON WARN line before the human-readable error; keep the
+    # readable part and cap the size so one finding stays one finding.
+    lines = [l for l in detail.splitlines() if not l.startswith('{"timestamp"')]
+    detail = " / ".join(l.strip() for l in lines if l.strip())[:600]
+    return Finding("DT000", "error", filename,
+                   f"the router itself rejects this config: {detail}")
 
 
 def main(argv=None) -> int:
@@ -643,6 +748,11 @@ def main(argv=None) -> int:
                          "or inferred per exporter from the endpoint host (default)")
     ap.add_argument("--strict", action="store_true", help="treat warnings as errors")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--router-bin", metavar="PATH",
+                    help="also run `PATH config validate` on each file (DT000). "
+                         "This is the router's own schema check and catches "
+                         "whole classes of mistake these rules cannot; any "
+                         "${env.*} the config references must be set.")
     args = ap.parse_args(argv)
 
     report, exit_code = {}, 0
@@ -654,6 +764,11 @@ def main(argv=None) -> int:
             print(f"ERROR parse  {filename}: {exc}", file=sys.stderr)
             exit_code = 2
             continue
+
+        if args.router_bin:
+            precheck = router_precheck(args.router_bin, filename)
+            if precheck:
+                findings.insert(0, precheck)
 
         report[filename] = [f.as_dict() for f in findings]
         errors = [f for f in findings if f.level == "error"]
@@ -675,6 +790,11 @@ def main(argv=None) -> int:
 
     if args.json:
         print(json.dumps(report, indent=2))
+    elif not args.router_bin:
+        print("\nnote: the router's own schema check was not run. These rules "
+              "cover the Dynatrace contract, not the router's full config "
+              "schema - pass --router-bin ./router to catch configs the router "
+              "itself rejects (DT000).")
     return exit_code
 
 

@@ -1,0 +1,7 @@
+persisted_queries:
+  enabled: true
+  local_manifests:
+    - ./persisted-query-manifest.json
+  safelist:
+    enabled: true
+    require_id: true

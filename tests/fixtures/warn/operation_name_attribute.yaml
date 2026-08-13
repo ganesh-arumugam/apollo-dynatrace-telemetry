@@ -1,0 +1,11 @@
+telemetry:
+  instrumentation:
+    instruments:
+      supergraph:
+        acme.graphql.operations:
+          value: unit
+          type: counter
+          unit: "{operation}"
+          description: "operations by name"
+          attributes:
+            graphql.operation.name: true

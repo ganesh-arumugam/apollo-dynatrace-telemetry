@@ -31,6 +31,7 @@ GOOD = {
           exporters:
             metrics:
               common:
+                service_name: apollo-router
                 buckets: [0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.5, 5.0, 10.0, 20.0]
               otlp:
                 enabled: true
@@ -479,6 +480,17 @@ BAD = {
                   unit: "{request}"
                   description: "gauge is not a supported instrument kind"
     """),
+    # Safelisting with APQ still on is rejected at startup:
+    # "apqs must be disabled to enable safelisting".
+    "safelist_without_apq_off.yaml": ("DT030", """
+        persisted_queries:
+          enabled: true
+          local_manifests:
+            - ./persisted-query-manifest.json
+          safelist:
+            enabled: true
+            require_id: true
+    """),
 }
 
 # fixture name -> (rule that must fire as a warning, yaml)
@@ -636,6 +648,61 @@ WARN = {
                 http:
                   headers:
                     Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+    """),
+    # Views match exact instrument names only; a wildcard silently matches
+    # nothing, so the drop/rename this view was written for never happens.
+    "wildcard_view.yaml": ("DT027", """
+        telemetry:
+          exporters:
+            metrics:
+              common:
+                service_name: apollo-router
+                buckets: [0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.5, 5.0, 10.0, 20.0]
+                views:
+                  - name: apollo.router.*
+                    aggregation:
+                      histogram:
+                        buckets: [0.1, 0.5, 1.0]
+              otlp:
+                enabled: true
+                protocol: http
+                temporality: delta
+                endpoint: https://abc.live.dynatrace.com:443/api/v2/otlp/v1/metrics
+                http:
+                  headers:
+                    Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+    """),
+    # Without service_name the router reports as unknown_service:router and
+    # every dashboard tile (all filter service.name) stays blank.
+    "no_service_name.yaml": ("DT028", """
+        telemetry:
+          exporters:
+            metrics:
+              common:
+                buckets: [0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.5, 5.0, 10.0, 20.0]
+              otlp:
+                enabled: true
+                protocol: http
+                temporality: delta
+                endpoint: https://abc.live.dynatrace.com:443/api/v2/otlp/v1/metrics
+                http:
+                  headers:
+                    Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+    """),
+    # One series per operation name walks into the OTel SDK's 2,000-datapoint
+    # cardinality ceiling and Dynatrace's per-series billing.
+    "operation_name_attribute.yaml": ("DT029", """
+        telemetry:
+          instrumentation:
+            instruments:
+              supergraph:
+                acme.graphql.operations:
+                  value: unit
+                  type: counter
+                  unit: "{operation}"
+                  description: "operations by name"
+                  attributes:
+                    graphql.operation.name: true
     """),
 }
 

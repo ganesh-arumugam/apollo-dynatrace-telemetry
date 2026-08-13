@@ -189,10 +189,14 @@ class TestRealWorldRouterConfigs(unittest.TestCase):
 
 
 class TestRuleCoverage(unittest.TestCase):
+    # DT000 is the router's own `config validate`, so no YAML fixture can trip
+    # it without the binary; TestRouterBinaryPreCheck covers it when one exists.
+    NO_FIXTURE = {"DT000"}
+
     def test_every_rule_has_a_fixture(self):
         covered = ({rule for rule, _ in make_fixtures.BAD.values()} |
                    {rule for rule, _ in make_fixtures.WARN.values()})
-        self.assertEqual(ALL_RULES - covered, set(),
+        self.assertEqual(ALL_RULES - covered - self.NO_FIXTURE, set(),
                          "rules with no fixture coverage")
 
     def test_rules_are_documented_in_readme(self):
@@ -201,6 +205,55 @@ class TestRuleCoverage(unittest.TestCase):
         for rule in sorted(ALL_RULES):
             with self.subTest(rule=rule):
                 self.assertIn(rule, readme)
+
+    def test_every_rule_has_a_definition_in_rules_md(self):
+        """docs/rules.md carries the symptom/why/fix for every rule, and the
+        validator's JSON output links each finding to docs/rules.md#<rule>, so
+        each rule needs a stable anchor there."""
+        with open(os.path.join(ROOT, "docs", "rules.md")) as fh:
+            rules_md = fh.read()
+        for rule in sorted(ALL_RULES):
+            with self.subTest(rule=rule):
+                self.assertIn(f'<a id="{rule.lower()}">', rules_md,
+                              f"{rule} has no anchor in docs/rules.md")
+
+    def test_json_findings_link_to_their_definition(self):
+        findings = validate_file(fixture("bad", "cumulative_temporality.yaml"))
+        docs = {f.as_dict()["docs"] for f in findings if f.rule == "DT002"}
+        self.assertEqual(docs, {"docs/rules.md#dt002"})
+
+
+@unittest.skipUnless(os.path.exists(os.path.join(ROOT, "router")),
+                     "no router binary at ./router")
+class TestRouterBinaryPreCheck(unittest.TestCase):
+    """DT000: with --router-bin, the router's own `config validate` runs first.
+    The router expands ${env.*} at validate time, so the fixture's variables
+    must be present in the subprocess environment."""
+
+    ENV = dict(os.environ,
+               DYNATRACE_API_TOKEN="dt0c01.TEST",
+               DYNATRACE_ENV_URL="https://abc.live.dynatrace.com:443")
+
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, os.path.join(ROOT, "scripts", "validate_dynatrace.py"),
+             "--router-bin", os.path.join(ROOT, "router"), "--json", *args],
+            capture_output=True, text=True, env=self.ENV)
+
+    def test_router_fatal_config_raises_dt000(self):
+        import json
+        result = self._run(fixture("bad", "logging_otlp_exporter.yaml"))
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        rule_ids = [f["rule"] for findings in payload.values() for f in findings]
+        self.assertIn("DT000", rule_ids)
+
+    def test_valid_config_gets_no_dt000(self):
+        import json
+        result = self._run(fixture("good", "metrics_only.yaml"))
+        payload = json.loads(result.stdout)
+        rule_ids = [f["rule"] for findings in payload.values() for f in findings]
+        self.assertNotIn("DT000", rule_ids)
 
 
 class TestValidatorCLI(unittest.TestCase):

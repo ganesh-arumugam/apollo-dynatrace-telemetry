@@ -297,15 +297,61 @@ class TestCollectorRules(unittest.TestCase):
         """)
         self.assertIn("DTC005", rules(findings, "warning"))
 
+    def test_disabling_retry_or_queue_warns(self):
+        """The exporterhelper's retry and queue are on by default and honor
+        Dynatrace's 429 Retry-After; explicitly disabling either turns every
+        throttled batch into dropped data."""
+        for knob in ("retry_on_failure", "sending_queue"):
+            with self.subTest(knob=knob):
+                findings = findings_for(f"""
+                    processors:
+                      batch: {{}}
+                    exporters:
+                      otlphttp/dynatrace:
+                        endpoint: ${{env:DT_OTLP_ENDPOINT}}
+                        headers:
+                          Authorization: "Api-Token ${{env:DT_API_TOKEN}}"
+                        {knob}:
+                          enabled: false
+                    service:
+                      pipelines:
+                        traces: {{receivers: [otlp], processors: [batch], exporters: [otlphttp/dynatrace]}}
+                """)
+                self.assertIn("DTC009", rules(findings, "warning"))
+
+    def test_explicitly_enabled_retry_and_queue_are_clean(self):
+        findings = findings_for("""
+            processors:
+              batch: {}
+            exporters:
+              otlphttp/dynatrace:
+                endpoint: ${env:DT_OTLP_ENDPOINT}
+                headers:
+                  Authorization: "Api-Token ${env:DT_API_TOKEN}"
+                retry_on_failure:
+                  enabled: true
+                sending_queue:
+                  enabled: true
+                  queue_size: 1000
+            service:
+              pipelines:
+                traces: {receivers: [otlp], processors: [batch], exporters: [otlphttp/dynatrace]}
+        """)
+        self.assertNotIn("DTC009", rules(findings))
+
     def test_every_rule_is_exercised_and_documented(self):
         with open(__file__) as fh:
             tests_body = fh.read()
         with open(os.path.join(ROOT, "README.md")) as fh:
             readme = fh.read()
+        with open(os.path.join(ROOT, "docs", "rules.md")) as fh:
+            rules_md = fh.read()
         for rule in RULES:
             with self.subTest(rule=rule):
                 self.assertIn(rule, tests_body, "rule has no test")
                 self.assertIn(rule, readme, "rule is not documented")
+                self.assertIn(f'<a id="{rule.lower()}">', rules_md,
+                              "rule has no anchor in docs/rules.md")
 
 
 class TestShippedCollectorTemplate(unittest.TestCase):
