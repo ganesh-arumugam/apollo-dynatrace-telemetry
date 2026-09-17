@@ -74,9 +74,16 @@ telemetry:
         enabled: true
         format: json
   instrumentation:
-    # Instruments live in their own file so they can be reviewed/owned
-    # separately from credentials and endpoints. Paste the block from
-    # templates/instruments.router.yaml here, or merge both files at deploy time
-    # with scripts/render.sh.
+    # Instruments and spans live in their own files (instruments.router.yaml,
+    # spans.router.yaml) so they can be reviewed/owned separately from
+    # credentials and endpoints. Paste both blocks in here before deploying —
+    # there is no merge script. templates/complete-configuration.router.yaml is
+    # the three files pre-merged into one paste-ready block if you'd rather
+    # start from that.
+    #
+    # Deploying this file as-is, with instruments left empty below, is the most
+    # common reason a freshly imported dashboard shows mostly empty tiles: every
+    # dynatrace.* custom counter, apollo.router.overhead, and subgraph.name
+    # attribution come from that block, not from the exporters above.
     instruments:
       default_requirement_level: required

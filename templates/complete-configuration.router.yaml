@@ -1,0 +1,283 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Apollo Router → Dynatrace: complete configuration (exporters + spans + instruments)
+#
+# Copy this whole block into your router.yaml to get started — the same
+# single-paste pattern as Apollo's Datadog and New Relic router-instrumentation
+# guides. dynatrace.router.yaml, spans.router.yaml, and instruments.router.yaml
+# are this same config split into three files for review purposes — same
+# settings and behavior, though spans.router.yaml carries longer explanatory
+# comments on a couple of selector rules that are condensed here. Use whichever
+# shape fits your workflow, but use ONE of them in full — a partial merge
+# (exporters only, no instruments/spans) is the most common reason a freshly
+# imported dashboard shows mostly empty tiles: every dynatrace.* custom
+# counter, apollo.router.overhead's filterable subgraph.active_requests
+# attribute, and subgraph.name attribution all come from the instrumentation
+# block below, not from the exporters.
+#
+# Verified against:
+#   - Apollo docs: apm-guides/dynatrace/dynatrace-metrics  (temporality: delta,
+#     protocol: http, /api/v2/otlp/v1/metrics, explicit :443, Api-Token header)
+#   - Apollo docs: apm-guides/dynatrace/dynatrace-traces
+#   - Apollo docs: enabling-telemetry/instruments, enabling-telemetry/standard-instruments
+#
+# Required env vars (see .env.example):
+#   DYNATRACE_ENV_URL    e.g. https://abc12345.live.dynatrace.com:443
+#   DYNATRACE_API_TOKEN  dt0c01.XXXX  (scopes: openTelemetryTrace.ingest, metrics.ingest, logs.ingest)
+#
+# Router preflight: OTEL_EXPORTER_OTLP_ENDPOINT / _TRACES_ / _METRICS_ must be
+# UNSET. v2.12 and earlier silently override this config; v2.13+ refuses to boot.
+#
+# Cardinality warning: every attribute you turn on multiplies series count, and
+# Dynatrace bills on ingested data points. Attributes marked (HIGH CARD) below
+# should stay off in production unless you have a specific investigation running.
+# ─────────────────────────────────────────────────────────────────────────────
+
+telemetry:
+  exporters:
+    # ── Metrics ──────────────────────────────────────────────────────────────
+    # Dynatrace rejects cumulative temporality. `delta` is mandatory, not a
+    # preference: with cumulative, counters silently never appear in Grail.
+    metrics:
+      common:
+        service_name: apollo-router
+        resource:
+          service.namespace: ${env.APOLLO_SERVICE_NAMESPACE:-supergraph}
+          deployment.environment: ${env.DEPLOY_ENV:-dev}
+      otlp:
+        enabled: true
+        protocol: http            # gRPC is NOT supported by Dynatrace OTLP
+        temporality: delta        # REQUIRED for Dynatrace
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/metrics
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+        batch_processor:
+          scheduled_delay: 5s
+          max_export_batch_size: 512
+          max_concurrent_exports: 1
+          max_export_timeout: 30s
+          max_queue_size: 2048
+
+    # ── Traces ───────────────────────────────────────────────────────────────
+    tracing:
+      common:
+        service_name: apollo-router
+        # Sample well below 1.0 in production. 1.0 on a busy router will get you
+        # rate-limited by Dynatrace and will dominate your DDU spend.
+        sampler: 0.05
+        parent_based_sampler: true
+        resource:
+          service.namespace: ${env.APOLLO_SERVICE_NAMESPACE:-supergraph}
+          deployment.environment: ${env.DEPLOY_ENV:-dev}
+      propagation:
+        trace_context: true
+      # Returns the trace id on the response — paste it straight into Dynatrace
+      # (fetch spans | filter trace.id == "...") when chasing a specific request.
+      experimental_response_trace_id:
+        enabled: true
+        header_name: apollo-trace-id
+      otlp:
+        enabled: true
+        protocol: http
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/traces
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+        batch_processor:
+          scheduled_delay: 5s
+          max_export_batch_size: 512
+          max_concurrent_exports: 1
+          max_export_timeout: 30s
+          max_queue_size: 2048
+
+    # ── Logs ─────────────────────────────────────────────────────────────────
+    # The router has no OTLP log exporter. Logs reach Dynatrace only by
+    # forwarding this stdout stream (a collector filelog receiver, or an
+    # existing host log agent) — see templates/dynatrace-logs.router.yaml.
+    logging:
+      stdout:
+        enabled: true
+        format:
+          json:
+            display_trace_id: open_telemetry
+            display_span_id: true
+
+  instrumentation:
+    spans:
+      # OpenTelemetry-standard span naming. `deprecated` is the legacy Router v1
+      # shape; its span names group less cleanly in Dynatrace.
+      mode: spec_compliant
+
+      # `recommended` adds OTel development-status attributes, including
+      # graphql.document — defensible on spans at low sampling, never on
+      # metrics. Keep `required` if operations can contain PII.
+      default_attribute_requirement_level: required
+
+      router:
+        attributes:
+          debug.incoming.traceparent:
+            request_header: traceparent
+          debug.router.trace_id:
+            trace_id: open_telemetry
+
+          # Worked example: reading a context key (here, `tenant_id` set by a
+          # Rhai script) back out as a span attribute. At `router` scope, use
+          # `response_context` — `request_context` reads a pre-hook snapshot
+          # and misses anything set during this same request. Full rule and
+          # runnable copy: templates/spans.router.yaml, demo/router.direct.yaml.
+          tenant.id:
+            response_context: tenant_id
+            default: unknown
+
+      supergraph:
+        attributes:
+          # Groups traces by operation in Dynatrace's trace search. (HIGH CARD)
+          # on graphs with many distinct/anonymous operation names.
+          graphql.operation.name: true
+
+          # Same tenant.id example as `router` above, via request_context
+          # instead: valid here because router_service (which set the key)
+          # already ran before this stage's request-time snapshot was taken.
+          # See templates/spans.router.yaml for the full request_context vs
+          # response_context rule.
+          tenant.id:
+            request_context: tenant_id
+            default: unknown
+
+          # ── GraphQL error detection (the important part) ──────────────────
+          # GraphQL errors return HTTP 200. Without this, Dynatrace counts them
+          # as successful requests and failure rate stays flat while clients
+          # see errors.
+          otel.status_code:
+            static: ERROR
+            condition:
+              eq:
+                - true
+                - on_graphql_error: true
+          otel.status_description:
+            response_errors: $[0].extensions.code
+          error.message:
+            response_errors: $[0].message
+          graphql.errors:
+            on_graphql_error: true
+
+      subgraph:
+        attributes:
+          subgraph.name: true
+          otel.status_code:
+            static: ERROR
+            condition:
+              eq:
+                - true
+                - subgraph_on_graphql_error: true
+          error.message:
+            subgraph_response_errors: $[0].message
+          graphql.errors:
+            subgraph_on_graphql_error: true
+
+      # Connector spans: the router makes the REST call itself, so without
+      # these the outbound HTTP hop is invisible in the trace waterfall.
+      # Omit this block if you don't use Apollo Connectors.
+      connector:
+        attributes:
+          subgraph.name: true
+          connector.source.name: true
+          connector.http.method: true
+          connector.url.template: true
+
+    events:
+      router:
+        request: info
+        response: "off"
+        error: error
+      subgraph:
+        request: info
+        response: "off"
+        error: error
+
+    instruments:
+      default_requirement_level: required
+
+      # ── Router service ────────────────────────────────────────────────────
+      router:
+        http.server.active_requests: true
+        http.server.request.duration:
+          attributes:
+            http.response.status_code: true
+        http.server.request.body.size: true
+        http.server.response.body.size: true
+
+        # Router processing time excluding subgraph/connector wait. "Is the
+        # router the bottleneck or my subgraphs?"
+        apollo.router.overhead: true
+
+        # Request count by status class — cheap, and the counter to reconcile
+        # against GraphOS operation counts when they disagree.
+        dynatrace.router.requests:
+          value: unit
+          type: counter
+          unit: "{request}"
+          description: "Router HTTP requests, by response status code"
+          attributes:
+            http.response.status_code: true
+
+        # 5xx-only counter so an alert can key off one series instead of
+        # filtering a histogram.
+        dynatrace.router.server.errors:
+          value: unit
+          type: counter
+          unit: "{error}"
+          description: "Router responses with a 5xx status"
+          # `gte` is not a router condition operator (eq/gt/lt/exists/all/any/not
+          # only); >= 500 is expressed as > 499.
+          condition:
+            gt:
+              - response_status: code
+              - 499
+
+      # ── Supergraph service ────────────────────────────────────────────────
+      supergraph:
+        dynatrace.graphql.operations:
+          value: unit
+          type: counter
+          unit: "{operation}"
+          description: "GraphQL operations executed, by operation type"
+          attributes:
+            graphql.operation.type: true
+            graphql.operation.name: false   # (HIGH CARD)
+
+      # ── Subgraph service ──────────────────────────────────────────────────
+      subgraph:
+        http.client.request.duration:
+          attributes:
+            subgraph.name: true
+        http.client.request.body.size: true
+        http.client.response.body.size: true
+
+        # Subgraph errors attributed to the subgraph that produced them.
+        dynatrace.subgraph.errors:
+          value: unit
+          type: counter
+          unit: "{error}"
+          description: "Subgraph responses that carried GraphQL errors"
+          condition:
+            eq:
+              - true
+              - subgraph_on_graphql_error: true
+          attributes:
+            subgraph.name: true
+
+      # ── Connector HTTP requests — omit if not using Apollo Connectors ──────
+      connector:
+        http.client.request.duration:
+          attributes:
+            connector.source.name: true
+
+      # ── Cache (response caching / entity caching) — requires GraphOS Router
+      # Enterprise + a Redis-backed cache store; omit otherwise ──────────────
+      cache:
+        apollo.router.response.cache:
+          attributes:
+            graphql.type.name: true
+            subgraph.name:
+              subgraph_name: true

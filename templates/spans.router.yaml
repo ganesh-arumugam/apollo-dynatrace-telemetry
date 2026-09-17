@@ -38,12 +38,96 @@ telemetry:
           debug.router.trace_id:
             trace_id: open_telemetry
 
+          # ── request_context vs response_context (the actual rule) ─────────
+          # Live-verified against router v2.17.0, side by side in the same
+          # request/response, at this exact `router` scope:
+          #
+          #   request_context: tenant_id   -> MISSING  (tenant_id set by a
+          #     Rhai script in router_service's own map_request)
+          #   response_context: tenant_id  -> "acme-corp"   (same key, same
+          #     request, same scope, same event — only the selector changed)
+          #
+          # `request_context` reads a snapshot of context frozen at the
+          # moment that stage's *request* processing began — before that
+          # stage's own hooks (Rhai/coprocessor/native plugins) have run, and
+          # before anything set further down the pipeline. It only ever sees
+          # values that already existed before this request reached this
+          # point — which is why `apollo::supergraph_schema_id` (fixed when
+          # the pipeline is built, long before any request) DOES resolve here
+          # at `on: request`, while anything mutated during request handling
+          # does not, no matter which service set it.
+          #
+          # `response_context` reads the live context as of response time —
+          # everything mutated anywhere during the request's full round trip
+          # (router_service, supergraph_service, subgraph calls, JWT auth,
+          # coprocessors, all of it) is visible, regardless of scope. This is
+          # the general fix: prefer `response_context` over `request_context`
+          # for anything set during request handling, and you can usually
+          # stay at `router` scope rather than hunting for the "right" one.
+          #
+          # `request_context` is still the right tool for two cases: reading
+          # a router-internal value that's fixed before requests arrive (like
+          # the schema id above), or reading something you know was set by a
+          # stage that runs strictly *before* the one you're reading from
+          # (e.g. router_service's own write is visible via request_context
+          # from `supergraph` on, since supergraph_service's request-time
+          # snapshot is taken after router_service has already run).
+          tenant.id:
+            response_context: tenant_id
+            default: unknown
+
       supergraph:
         attributes:
           # Groups traces by operation in Dynatrace's trace search. Watch
           # cardinality: unbounded/anonymous operation names bloat Dynatrace's
           # request naming, the same way they affect Datadog's resource.name.
           graphql.operation.name: true
+
+          # Same tenant.id example as `router` above, but via request_context
+          # instead — included to show the ancestor-stage case: this resolves
+          # here (unlike at `router`) because router_service already ran
+          # before supergraph_service's request-time snapshot was taken.
+          # `default` distinguishes "selector misconfigured" (attribute
+          # missing entirely) from "key never got set / read too early" (you
+          # see the default instead). See the `router` scope comment above
+          # for the full request_context vs response_context rule, and
+          # demo/router.direct.yaml + demo/rhai/main.rhai for a runnable copy
+          # of this exact case.
+          #
+          # Also live-verified, not scope-related:
+          #   1. `context.upsert(key, value)` — upsert() takes a *resolver
+          #      callback*, not a plain value. Passing a value throws a Rhai
+          #      type error and the key never gets set. Use plain assignment
+          #      (`request.context["key"] = value`) unless you actually need
+          #      get-or-set semantics.
+          #   2. Licensing: custom span/event attributes via selectors are a
+          #      licensed GraphOS Router feature ("Advanced telemetry"), not
+          #      available in Router Core. Without APOLLO_KEY + APOLLO_GRAPH_REF
+          #      pointing at a graph on a plan that includes it, the router
+          #      refuses to start — confirmed locally: adding this attribute
+          #      to an unlicensed router produces "Not connected to GraphOS
+          #      ... Advanced telemetry .telemetry..spans.supergraph" and the
+          #      process exits. See
+          #      https://apollographql.com/docs/graphos/routing/graphos-features
+          #   3. JWT claims: `apollo::authentication::jwt_claims` holds ALL
+          #      claims as a map, not a scalar. Neither selector supports a
+          #      dotted path into it (`jwt_claims.sub` reads as one literal,
+          #      nonexistent key — always MISSING). Reading the bare key does
+          #      work and renders the whole map as one JSON-stringified
+          #      attribute. For a single claim as its own clean attribute,
+          #      promote it to its own context key in Rhai first:
+          #        fn router_service(service) {
+          #          service.map_request(|request| {
+          #            let claims = request.context["apollo::authentication::jwt_claims"];
+          #            if claims != () { request.context["tenant_id"] = claims["tenant"]; }
+          #          });
+          #        }
+          #      then read `tenant_id` with response_context (any scope) or
+          #      request_context (this scope or later — router_service ran
+          #      first).
+          tenant.id:
+            request_context: tenant_id
+            default: unknown
 
           # ── GraphQL error detection (the important part) ──────────────────
           otel.status_code:
