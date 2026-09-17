@@ -98,6 +98,21 @@ if [ "$MODE" = "collector" ]; then
   say "collector up, self-metrics on http://127.0.0.1:8888/metrics"
 fi
 
+# ── coprocessor (direct mode only; demo/router.collector.yaml has no coprocessor: block) ──
+if [ "$MODE" = "direct" ]; then
+  echo
+  echo "Coprocessor"
+  COPROCESSOR_PORT="${COPROCESSOR_PORT:-8082}" \
+    python3 -u "$HERE/coprocessor.py" >"$RUN_DIR/coprocessor.log" 2>&1 &
+  echo $! > "$RUN_DIR/coprocessor.pid"
+  deadline=$(( $(date +%s) + 10 ))
+  until curl -sf "http://127.0.0.1:${COPROCESSOR_PORT:-8082}/" >/dev/null 2>&1; do
+    [ "$(date +%s)" -ge "$deadline" ] && die "coprocessor did not start — see $RUN_DIR/coprocessor.log"
+    sleep 0.3
+  done
+  say "coprocessor up on :${COPROCESSOR_PORT:-8082}"
+fi
+
 # ── subgraphs ────────────────────────────────────────────────────────────────
 echo
 echo "Subgraphs"

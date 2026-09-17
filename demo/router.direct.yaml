@@ -2,12 +2,42 @@
 #
 # This is templates/dynatrace.router.yaml + spans.router.yaml +
 # instruments.router.yaml merged into one runnable file, plus the local listen
-# ports the demo uses. Nothing else: no Jaeger, no Prometheus, no extras.
+# ports the demo uses, plus a `request_context` selector worked example
+# (demo/rhai/main.rhai sets tenant_id, `router.attributes.tenant.id` and the
+# `context.check` event both read it back). Nothing else: no Jaeger, no
+# Prometheus, no extras.
+#
+# Custom span/event attributes are a licensed GraphOS Router feature
+# ("Advanced telemetry") — https://apollographql.com/docs/graphos/routing/graphos-features.
+# Without APOLLO_KEY + APOLLO_GRAPH_REF on a plan that includes it, the
+# router refuses to start the moment any spans.<service>.attributes or
+# events.<service>.<name> block is present. Live-verified: fails closed on
+# router v2.0.0 unlicensed, runs clean on v2.17.0 licensed.
 #
 # Validate:  python3 scripts/validate_dynatrace.py demo/router.direct.yaml
 # Run:       ./demo/up.sh direct
 #
 # Env: DYNATRACE_ENV_URL (with :443), DYNATRACE_API_TOKEN, DEPLOY_ENV
+
+rhai:
+  scripts: ./demo/rhai
+  main: main.rhai
+
+# Coprocessor worked example (demo/coprocessor.py): a `RouterRequest`-stage
+# call that sets context key `coprocessor_tag`, read back below via
+# `spans.router.attributes.coprocessor.tag`. Side-by-side with the Rhai
+# `tenant_id` example (demo/rhai/main.rhai) — same stage, same rule about
+# request_context vs response_context, different mechanism.
+coprocessor:
+  url: http://127.0.0.1:8082
+  timeout: 2s
+  router:
+    request:
+      headers: false
+      body: false
+      # `all`, not `true` (legacy v1-name alias) — see templates/spans.router.yaml
+      # for why this repo prefers the current context config shape.
+      context: all
 
 supergraph:
   listen: 127.0.0.1:4000
@@ -90,8 +120,25 @@ telemetry:
     spans:
       mode: spec_compliant
       default_attribute_requirement_level: required
+      router:
+        attributes:
+          # Set by demo/coprocessor.py during the `RouterRequest` coprocessor
+          # call. `response_context`, not `request_context`: at this same
+          # `router` scope, request_context reads the pre-hook snapshot, so
+          # it would show `default` even though the key is set moments
+          # later. See templates/spans.router.yaml for the full rule and the
+          # `tenant.id` / Rhai equivalent of this same gotcha.
+          coprocessor.tag:
+            response_context: coprocessor_tag
+            default: unknown
       supergraph:
         attributes:
+          # Promotes the context key set by demo/rhai/main.rhai onto a span
+          # attribute. `default` distinguishes "selector misconfigured"
+          # (attribute missing) from "key never got set" (default shows up).
+          tenant.id:
+            request_context: tenant_id
+            default: unknown
           graphql.operation.name: true
           # GraphQL errors come back with HTTP 200. Without this Dynatrace counts
           # them as successful requests.
@@ -176,6 +223,30 @@ telemetry:
         request: info
         response: "off"
         error: error
+        # Verification aid for the coprocessor.tag example above: prints the
+        # resolved attribute straight to stdout instead of requiring an OTLP
+        # trace to be decoded to see it. Same pattern as supergraph's
+        # context.check below, for the coprocessor case instead of Rhai.
+        coprocessor.check:
+          message: "coprocessor context selector check"
+          level: info
+          on: response
+          attributes:
+            coprocessor.tag:
+              response_context: coprocessor_tag
+              default: unknown
+      supergraph:
+        # Verification aid for the request_context example above: prints the
+        # resolved attribute straight to stdout instead of requiring an OTLP
+        # trace to be decoded to see it.
+        context.check:
+          message: "context selector check"
+          level: info
+          on: response
+          attributes:
+            tenant.id:
+              request_context: tenant_id
+              default: unknown
       subgraph:
         request: info
         response: "off"

@@ -56,6 +56,14 @@ exporters:
       enabled: true
     sending_queue:
       enabled: true
+  # Prints every received span (attributes included) to the collector's own
+  # container logs. Independent of the Dynatrace hop above — exporters in a
+  # pipeline fan out concurrently, so this still shows what the router sent
+  # even when DT_OTLP_ENDPOINT is unreachable or the tenant is down. That
+  # makes it the right place to check "did the attribute make it this far?"
+  # without needing Dynatrace at all: docker compose logs otel-collector.
+  debug:
+    verbosity: detailed
 
 service:
   # Exposes otelcol_receiver_accepted_* / otelcol_exporter_send_failed on :8888,
@@ -69,7 +77,7 @@ service:
     traces:
       receivers: [otlp]
       processors: [resource/identity, batch]
-      exporters: [otlphttp/dynatrace]
+      exporters: [otlphttp/dynatrace, debug]
     metrics:
       receivers: [prometheus]
       processors: [cumulativetodelta, resource/identity, batch/metrics]

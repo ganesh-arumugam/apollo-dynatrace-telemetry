@@ -4,7 +4,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_DIR="$HERE/.run"
 
-for name in router subgraphs; do
+for name in router subgraphs coprocessor; do
   pidfile="$RUN_DIR/${name}.pid"
   if [ -f "$pidfile" ]; then
     pid="$(cat "$pidfile")"

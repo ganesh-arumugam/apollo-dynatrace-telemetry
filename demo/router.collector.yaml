@@ -10,6 +10,10 @@
 #
 # Env: OTEL_COLLECTOR_GRPC (default http://127.0.0.1:4317), DEPLOY_ENV
 
+rhai:
+  scripts: ./demo/rhai
+  main: main.rhai
+
 supergraph:
   listen: 127.0.0.1:4000
   # sandbox (below) refuses to start unless introspection is on.
@@ -71,6 +75,13 @@ telemetry:
       supergraph:
         attributes:
           graphql.operation.name: true
+          # request_context worked example — see templates/spans.router.yaml
+          # for the full write-up of why this must be `supergraph` scope
+          # (not `router`) and not `context.upsert()`. Set by
+          # demo/rhai/main.rhai.
+          tenant.id:
+            request_context: tenant_id
+            default: unknown
           otel.status_code:
             static: ERROR
             condition:
