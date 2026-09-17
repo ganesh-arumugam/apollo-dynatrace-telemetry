@@ -19,7 +19,15 @@ Shape (a typical products/orders split):
 Fault injection, so the error instruments have something to count:
 
     Query.boom                  -> GraphQL error from the products subgraph
-    ?fail=1 on the subgraph URL -> HTTP 500 for the next request
+    ?fail=1 on the subgraph URL -> HTTP 500, but only if YOU curl that URL
+                                    directly — the router's own subgraph
+                                    fetches always hit "/" with no query
+                                    string, so this never fires from router
+                                    traffic. Use FAIL_EVERY for that.
+    FAIL_EVERY=5                 -> every 5th request across both subgraphs
+                                    (router traffic included) gets HTTP 500,
+                                    so dynatrace.subgraph.errors and the 5xx
+                                    bucket actually have router-driven data
     SLOW_MS=250                 -> add latency to every response
 
 Usage:
@@ -47,6 +55,20 @@ ORDERS = [
 ]
 
 SLOW_MS = int(os.environ.get("SLOW_MS", "0"))
+FAIL_EVERY = int(os.environ.get("FAIL_EVERY", "0"))  # 0 = disabled, default-off
+_fail_lock = threading.Lock()
+_fail_counter = {"n": 0}
+_products_lock = threading.Lock()  # PRODUCTS is mutated by addProduct, read everywhere else
+
+
+def _fault_due() -> bool:
+    """Shared counter across both subgraphs so router traffic to either one
+    can trip it — a real outage doesn't pick a favorite."""
+    if FAIL_EVERY <= 0:
+        return False
+    with _fail_lock:
+        _fail_counter["n"] += 1
+        return _fail_counter["n"] % FAIL_EVERY == 0
 
 
 def product_stub(product_id: str) -> dict:
@@ -79,7 +101,7 @@ class SubgraphHandler(BaseHTTPRequestHandler):
 
     # -- resolution -------------------------------------------------------
     def do_POST(self):
-        if "fail=1" in (self.path or ""):
+        if "fail=1" in (self.path or "") or _fault_due():
             self._send({"errors": [{"message": f"{self.name} subgraph unavailable"}]},
                        status=500)
             return
@@ -113,6 +135,15 @@ class SubgraphHandler(BaseHTTPRequestHandler):
                 else:
                     entities.append(None)
             return {"data": {"_entities": entities}}
+
+        if "addProduct" in query:
+            title = variables.get("title", "Untitled")
+            price = float(variables.get("price", 0.0))
+            with _products_lock:
+                new_id = f"product:{len(PRODUCTS) + 1}"
+                PRODUCTS[new_id] = {"id": new_id, "title": title, "price": price}
+                created = PRODUCTS[new_id]
+            return {"data": {"addProduct": created}}
 
         if "boom" in query:
             return {"data": {"boom": None},

@@ -9,6 +9,12 @@ type Query {
   boom: String
 }
 
+type Mutation {
+  """Appends an in-memory product. Exists so client-insights data has a
+  mutation to report, not just queries — state resets on subgraph restart."""
+  addProduct(title: String!, price: Float!): Product!
+}
+
 type Product @key(fields: "id") {
   id: ID!
   title: String!
