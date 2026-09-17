@@ -15,6 +15,7 @@ demo/.run/
 .claude/
 .vscode/
 .idea/
+.DS_Store
 
 # Python
 __pycache__/

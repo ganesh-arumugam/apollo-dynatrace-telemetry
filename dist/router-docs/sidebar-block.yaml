@@ -1,0 +1,23 @@
+# Replace the existing Dynatrace entry in docs/source/_sidebar.yaml
+# (under Features > Observability > Router Telemetry (OTEL) > APM Guides)
+# with this block. Indentation matches the file on `main` as of 2026-08-17:
+# the Dynatrace `- label:` sits at the same depth as `- label: "Datadog"`.
+#
+# Current block being replaced:
+#                  - label: "Dynatrace"
+#                    children:
+#                      - label: "Metrics"
+#                        href: "./observability/router-telemetry-otel/apm-guides/dynatrace/dynatrace-metrics"
+#                      - label: "Traces"
+#                        href: "./observability/router-telemetry-otel/apm-guides/dynatrace/dynatrace-traces"
+
+                  - label: "Dynatrace"
+                    children:
+                      - label: "Overview"
+                        href: "./observability/router-telemetry-otel/apm-guides/dynatrace"
+                      - label: "Metrics"
+                        href: "./observability/router-telemetry-otel/apm-guides/dynatrace/dynatrace-metrics"
+                      - label: "Traces"
+                        href: "./observability/router-telemetry-otel/apm-guides/dynatrace/dynatrace-traces"
+                      - label: "Dashboard Template"
+                        href: "./observability/router-telemetry-otel/apm-guides/dynatrace/dashboard-template"

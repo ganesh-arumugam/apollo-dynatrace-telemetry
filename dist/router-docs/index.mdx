@@ -1,0 +1,101 @@
+---
+title: Dynatrace Integration
+subtitle: Monitor your Apollo Router with Dynatrace's observability platform
+description: Learn how to connect your Apollo Router to Dynatrace for distributed tracing, metrics collection, and dashboards via OpenTelemetry Protocol (OTLP).
+context:
+  - telemetry
+---
+
+Integrate your Apollo Router with Dynatrace to gain visibility into your GraphQL infrastructure through distributed tracing, metrics, and pre-built dashboards.
+
+## Recommended setup flow
+
+1. **Choose a connection method** (this page): Decide between direct OTLP export and an OpenTelemetry Collector
+1. **[Configure the metrics exporter](/graphos/routing/observability/router-telemetry-otel/apm-guides/dynatrace/dynatrace-metrics)**: Send router metrics to Dynatrace over OTLP
+1. **[Configure the trace exporter](/graphos/routing/observability/router-telemetry-otel/apm-guides/dynatrace/dynatrace-traces)**: Send router spans to Dynatrace over OTLP
+1. **[Create a dashboard](/graphos/routing/observability/router-telemetry-otel/apm-guides/dynatrace/dashboard-template)**: Import Apollo's pre-configured Dynatrace dashboard template
+
+## Connection methods
+
+Choose one of the following methods based on your infrastructure:
+
+- **Direct OTLP/HTTP export**: The router exports metrics and traces straight to your Dynatrace environment's OTLP endpoints. Fewest moving parts, and the router produces delta metrics itself. This method cannot ship router logs (see [Router logs](#router-logs)).
+- **[OpenTelemetry collector](https://opentelemetry.io/docs/collector/)**: The router exports OTLP to a collector, and the collector forwards to Dynatrace with an `otlphttp` exporter. Use this method to keep Dynatrace credentials out of the router config, fan out to more than one backend, or ship router logs by tailing the router's stdout with a `filelog` receiver. If the collector receives cumulative metrics, its metrics pipeline must include the [`cumulativetodelta` processor](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/cumulativetodeltaprocessor).
+- **ActiveGate or Dynatrace Managed**: When the router has no direct route to the internet, an [ActiveGate](https://docs.dynatrace.com/docs/extend-dynatrace/opentelemetry/getting-started/otlp-export) provides a local ingest endpoint, playing a role similar to a local agent in other APM stacks. Only the endpoint's host and path prefix change:
+
+| Deployment | Endpoint shape |
+|---|---|
+| SaaS | `https://{env-id}.live.dynatrace.com:443/api/v2/otlp/v1/{signal}` |
+| Managed | `https://{your-domain}:443/e/{env-id}/api/v2/otlp/v1/{signal}` |
+| ActiveGate | `https://{activegate-host}:9999/e/{env-id}/api/v2/otlp/v1/{signal}` |
+
+## Configuration requirements
+
+Dynatrace's OTLP ingest has several hard requirements. Most misconfigurations produce no router error—the export appears to succeed while the data never arrives—so verify each of these:
+
+- **Temporality must be `delta`** on the metrics exporter. Dynatrace accepts cumulative metrics with a 2xx response and then silently drops them.
+- **Protocol must be `http`** on every signal. Dynatrace doesn't support gRPC ingest, and an omitted `protocol` defaults to gRPC, so the exporter fails to connect.
+- **Each signal has its own endpoint path**: `/api/v2/otlp/v1/metrics`, `/api/v2/otlp/v1/traces`, and `/api/v2/otlp/v1/logs`. A mismatched path—for example, the traces path on the metrics exporter—can be accepted and then discarded.
+- **Include the port explicitly.** If your endpoint host doesn't contain a port, append `:443`.
+- **The `Authorization` header value starts with `Api-Token`**, not `Bearer`. A `Bearer` token returns 401s that surface only in exporter logs.
+- **Configure one exporter per signal.** Metrics, traces, and logs are separate exporters in `telemetry.exporters`; enabling one does nothing for the others.
+- **Unset the `OTEL_EXPORTER_OTLP_*` environment variables** (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`). In router v2.12 and earlier they silently override the YAML telemetry configuration; v2.13 and later refuses to start.
+
+## Minimal configuration
+
+The following configuration exports metrics and traces directly to Dynatrace. Set `DYNATRACE_ENV_URL` (for example, `https://abc12345.live.dynatrace.com:443`) and `DYNATRACE_API_TOKEN` in the router's environment.
+
+```yaml title="router.yaml"
+telemetry:
+  exporters:
+    metrics:
+      common:
+        service_name: apollo-router
+      otlp:
+        enabled: true
+        protocol: http            # Dynatrace doesn't support gRPC ingest
+        temporality: delta        # required; cumulative metrics are dropped
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/metrics
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+    tracing:
+      common:
+        service_name: apollo-router
+        sampler: 0.05             # sample well below 1.0 in production
+      otlp:
+        enabled: true
+        protocol: http
+        endpoint: ${env.DYNATRACE_ENV_URL}/api/v2/otlp/v1/traces
+        http:
+          headers:
+            Authorization: "Api-Token ${env.DYNATRACE_API_TOKEN}"
+    logging:
+      stdout:
+        enabled: true
+        format: json
+```
+
+<Note>
+
+Reference the token with `${env.DYNATRACE_API_TOKEN}` (or `${file.}`) rather than inlining it in `router.yaml`.
+
+</Note>
+
+## Router logs
+
+The router has no OTLP log exporter—`telemetry.exporters.logging` supports only `common` and `stdout`, and a `logging.otlp` key prevents the router from starting. To get router logs into Dynatrace, emit JSON logs to stdout (as in the configuration above) and forward them with a log shipper: an OpenTelemetry Collector `filelog` receiver, or an existing host forwarder such as OneAgent log ingestion.
+
+## API tokens
+
+Dynatrace uses different token types for ingest and for the platform APIs. Using one where the other is expected returns a 401.
+
+| Purpose | Header | Token type and scopes |
+|---|---|---|
+| OTLP ingest (metrics, traces, logs) | `Authorization: Api-Token dt0c01...` | Access token with `metrics.ingest`, `openTelemetryTrace.ingest`, `logs.ingest` |
+| Dashboard import | `Authorization: Bearer dt0s16...` | Platform token with `document:documents:write` |
+
+## Additional resources
+
+- [Dynatrace OTLP export documentation](https://docs.dynatrace.com/docs/extend-dynatrace/opentelemetry/getting-started/otlp-export)
+- [Apollo Router Telemetry Reference](/graphos/routing/observability/router-telemetry-otel)

@@ -1,0 +1,105 @@
+---
+title: Dashboard Template for Dynatrace
+subtitle: Use a pre-configured Dynatrace dashboard for the Apollo GraphOS Runtime
+description: Set up and use a pre-configured Dynatrace dashboard for monitoring the Apollo GraphOS Runtime.
+context:
+  - telemetry
+---
+
+This guide walks through using Apollo's pre-configured template to create a Dynatrace dashboard and monitor your Apollo Router.
+
+The dashboard is organized to follow a typical investigation workflow, from high-level health to specific subsystems:
+
+- **Overview**: request rate, 5xx errors, p95 latency, in-flight requests, SLA compliance
+- **Traffic**: requests by status code, operations by type, request and response body sizes
+- **Latency and overhead**: router latency percentiles, router overhead vs subgraph time, per-subgraph latency
+- **Errors**: GraphQL errors by code, subgraph errors by subgraph, 5xx over time
+- **Saturation**: open connections, compute job queue depth and duration
+- **Cache and query planning**: cache hit rates, query planning latency
+- **Connector HTTP** and **Coprocessors**: populated only when those features are in use
+- **Traces and dependencies**: top operations by p99, failed request exemplars, dependency volumes, error logs
+
+Some tiles are empty by design and say so in their titles: cache tiles require router caching, connector tiles require Apollo Connectors, and the error log tile requires forwarding the router's stdout (the router has no OTLP log exporter).
+
+## Prerequisites
+
+- Metrics and traces exporters configured per the [metrics](/graphos/routing/observability/router-telemetry-otel/apm-guides/dynatrace/dynatrace-metrics) and [traces](/graphos/routing/observability/router-telemetry-otel/apm-guides/dynatrace/dynatrace-traces) guides
+- The instruments configuration shipped alongside the template (`instruments.router.yaml`), which enables the standard and custom instruments the tiles query
+- Span error marking, so failed GraphQL requests appear as failures:
+
+<Note>
+
+The exporter configuration on the metrics and traces guides is deliberately minimal — it gets data flowing, but on its own it enables none of the custom counters (`dynatrace.router.requests`, `apollo.router.overhead`, `subgraph.name` attribution) this dashboard charts. Deploying exporters without instruments is the most common reason an imported dashboard looks mostly empty. Use `complete-configuration.router.yaml` from the template directory (below) to deploy exporters, instruments, and spans together in one block.
+
+</Note>
+
+```yaml title="router.yaml"
+telemetry:
+  instrumentation:
+    spans:
+      mode: spec_compliant
+      supergraph:
+        attributes:
+          otel.status_code:
+            static: ERROR
+            condition:
+              eq:
+                - true
+                - on_graphql_error: true
+          error.message:
+            response_errors: $[0].message
+```
+
+<Note>
+
+GraphQL errors are returned with HTTP 200. Without the `otel.status_code` attribute above, Dynatrace sees every request as successful and the dashboard's failure rate stays flat while clients receive errors.
+
+</Note>
+
+## Get the template
+
+The template lives in the [`dynatrace/` directory of the apm-templates repository](https://github.com/apollographql/apm-templates). It contains the dashboard JSON, an import script, `complete-configuration.router.yaml` (exporters + instruments + spans in one paste-ready block — start here), the same configuration split into separate files for review, and a DQL query reference.
+
+## Set your service name
+
+Every tile filters on `service.name`, with a default of `apollo-router`. If your router reports a different service name, the import succeeds but every tile is empty. Dynatrace Platform dashboards don't support template variables, so re-target the JSON before importing. The string `apollo-router` appears only inside that filter, so a find-and-replace is safe and complete:
+
+```bash
+sed -i 's/apollo-router/my-supergraph/g' dashboard-template.json
+```
+
+## Import the dashboard
+
+Import the dashboard JSON using either method:
+
+1. **Platform Documents API**: `POST` the JSON to `https://{env-id}.apps.dynatrace.com/platform/document/v1/documents` with a platform token that has the `document:documents:write` scope, or use the import script in the template directory.
+2. **Manual upload**: In the Dynatrace **Dashboards** app, select **Upload** and choose the JSON file.
+
+<Caution>
+
+The Documents API requires a **platform token** sent as `Authorization: Bearer dt0s16...`—not the `Api-Token` access token used for OTLP ingest. Using the ingest token returns a 401 that's easy to misread as an ingest problem.
+
+</Caution>
+
+## Interpret the dashboard
+
+- **Latency percentiles come from spans, not the duration histogram.** DQL's `percentile()` over a rolled-up metric returns the average, so p50, p95, and p99 on the histogram would all show the same number. The template's percentile tiles query `fetch spans` instead, and are subject to your trace sampling rate.
+- **Counters arrive with delta temporality**, so `sum()` over an interval is the count for that interval—no rate or diff function is needed.
+- **Some duration histograms appear in Grail with a `.seconds` suffix** appended to the instrument name. If a metric tile shows no data, search Grail for both spellings.
+
+## Troubleshoot
+
+| Symptom | Likely cause |
+|---|---|
+| Every tile is empty | `service.name` doesn't match the dashboard filter; re-target the JSON and re-import |
+| Most tiles are empty, but a few (like in-flight requests) show data | Only the exporter config was deployed, not the instruments/spans blocks — deploy `complete-configuration.router.yaml` in full, not just the exporters |
+| Only the cache, connector, coprocessor, or log tiles are empty | Expected — those tiles require a router feature (entity caching, Apollo Connectors, a coprocessor, or log forwarding) that most graphs don't enable |
+| Counters and histograms never appear, no errors anywhere | `temporality` is `cumulative` or unset; Dynatrace accepts the export with a 2xx and drops it |
+| Exporter logs 404s | Endpoint uses the `.apps.` host instead of `.live.`, or a collector-style path like `/v1/metrics` instead of `/api/v2/otlp/v1/metrics` |
+| Metric visible in DQL but "not found" in the classic Metrics API (or vice versa) | The classic Metrics API addresses OTLP metrics with an `ext:` prefix; DQL uses the plain dotted key |
+
+## Follow best practices
+
+- This dashboard is a starting point. Modify it to suit your particular needs.
+- Be aware of metric cardinality. Every attribute multiplies series count, and Dynatrace bills on ingested data points. Keep high-cardinality attributes such as `graphql.operation.name` off metrics in production.
+- In high-traffic environments, keep the trace sampler well below `1.0` to avoid Dynatrace rate limits.
