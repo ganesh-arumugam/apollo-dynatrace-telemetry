@@ -34,10 +34,10 @@ validators, and a test harness that verifies the export path without a tenant.
 |---|---|
 | Which router metrics exist, and which should we collect? | [`docs/metrics.md`](docs/metrics.md) — every metric, the question it answers, what it costs to enable, and which Dynatrace refuses |
 | What does a healthy value look like — when should a number worry us? | [`dashboards/dql-queries.md`](dashboards/dql-queries.md#what-each-metric-is-telling-you) — a Good / Concerning read on every charted metric |
-| The config validates, but a metric never shows up in Dynatrace. | [`docs/metrics.md`](docs/metrics.md#15-metrics-dynatrace-rejects) — some types are accepted with a 2xx and refused at ingest |
+| The config validates, but a metric never shows up in Dynatrace. | [`docs/metrics.md`](docs/metrics.md#17-metrics-dynatrace-rejects) — some types are accepted with a 2xx and refused at ingest |
 | Attributes disappeared from a metric that worked for weeks. | [`docs/metrics.md`](docs/metrics.md#attributes-are-what-cost-you-not-metrics) — the 2,000-datapoint cardinality ceiling strips them silently |
 | Why are p50, p95 and p99 identical in my DQL query? | [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md) — `percentile()` over a rolled-up metric returns the average; use spans |
-| How do we monitor whether a subgraph is reachable? | [`docs/metrics.md`](docs/metrics.md#14-subgraph-health--the-gap) — no product answer exists; the workarounds and their trade-offs |
+| How do we monitor whether a subgraph is reachable? | [`docs/metrics.md`](docs/metrics.md#16-subgraph-health--the-gap) — no product answer exists; the workarounds and their trade-offs |
 | What are histogram buckets, and why is my p95 a guess? | [`docs/percentiles-and-buckets.md`](docs/percentiles-and-buckets.md) — the mechanism behind the recommendations, with a worked example |
 | Why doesn't the p95 in Dynatrace match GraphOS Studio? | [`docs/studio-vs-dynatrace-latency.md`](docs/studio-vs-dynatrace-latency.md) — the two pipelines, which numbers are comparable, and how to read percentiles correctly |
 | If we standardize on Dynatrace, what do we lose from Studio? | [`docs/studio-vs-dynatrace-capabilities.md`](docs/studio-vs-dynatrace-capabilities.md) — what each holds that the other cannot, and what to build where |

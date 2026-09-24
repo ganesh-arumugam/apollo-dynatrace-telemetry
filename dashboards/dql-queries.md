@@ -175,7 +175,7 @@ waits for it rather than reporting a false negative.
 
 Some metrics never arrive because Dynatrace rejects the type at ingest, which leaves
 no error in the router log — see
-[`docs/metrics.md` §15](../docs/metrics.md#15-metrics-dynatrace-rejects).
+[`docs/metrics.md` §17](../docs/metrics.md#17-metrics-dynatrace-rejects).
 
 **3. Chart it** using shape B.
 
@@ -199,6 +199,19 @@ Shape from the tables above; this is what to conclude.
 | `http.server.active_requests` | E | a stable band proportional to request rate | a climbing floor that never returns to baseline |
 | root span `duration` | D | p99 within ~3x of p50, stable across deploys | p99 detaching from p50: a subset of operations is degrading |
 | `http.server.request.body.size` · `http.server.response.body.size` | C | steady | growing responses, usually an over-fetching client |
+
+**"Served" vs "completed."** `dynatrace.router.requests` counts every request the
+router finished handling, including ones where the client disconnected before a
+response could be sent — those land under `http.response.status_code == 499`, not
+`200`. So "requests served" is the plain sum; "requests completed" (client actually
+got a response) is the same query with `499` filtered out:
+
+```dql
+timeseries completed = sum(dynatrace.router.requests),
+  filter: {service.name == "apollo-router" and http.response.status_code != "499"}
+```
+
+Confirmed live on router 2.17.0 — see `docs/metrics.md`'s pitfalls section.
 
 Three of these count different things and will not match.
 `dynatrace.router.requests` counts HTTP requests,

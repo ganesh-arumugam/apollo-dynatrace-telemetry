@@ -49,6 +49,69 @@ array, so any error rate built on status codes reports zero while the graph is
 broken. Error monitoring therefore needs a GraphQL-aware counter rather than a
 status-code one: use `apollo.router.graphql_error`.
 
+**"Requests served" and "requests completed" are not the same number, and
+`dynatrace.router.requests` already carries the distinction.** Reproduced live
+(router 2.17.0, harness with both a Prometheus scrape and OTLP to Dynatrace
+enabled at once): a request whose client disconnects before the router can
+send a response still increments `dynatrace.router.requests` — but under
+`http.response.status_code == 499` ("client closed request", the same
+convention nginx uses), not `200`. So:
+
+```text
+total requests served    = sum(dynatrace.router.requests)
+total requests completed = sum(dynatrace.router.requests, filter: http.response.status_code != 499)
+```
+
+No separate metric is needed for "completed" — filter the one that already
+exists. Two things worth knowing alongside this: `dynatrace.router.server.errors`
+does **not** catch a 499 (its condition is `gt 499`, i.e. `>= 500`), so a run of
+client-disconnects will not show up as router errors; and `http.server.active_requests`
+still returns cleanly to baseline for these requests — the router does not leak
+an in-flight slot just because the client walked away.
+
+**`fetch spans | summarize count()` is a request COUNT capped by the tracing
+sampler — never use it as "total requests."** Metrics are not sampled; spans
+are. A `fetch spans` query — even one correctly scoped to
+`request.is_root_span == true` or `span.kind == "server"` — only ever sees
+the fraction of requests that got traced. Reproduced live at two sampler
+settings, same 40-request batch, same router:
+
+| `telemetry.exporters.tracing.common.sampler` | requests | root spans counted |
+|---|---|---|
+| 1.0 | 40 | 30 |
+| 0.5 | 40 | 17 |
+
+`dynatrace.router.requests` (the metric) reported `40` in both runs — metrics
+export on every request regardless of the tracing sampler. Production
+samplers are typically 0.01–0.1 (see
+[`templates/prometheus-and-dynatrace.router.yaml`](../templates/prometheus-and-dynatrace.router.yaml)'s
+`0.05` and this repo's own recommendation against `1.0` outside a demo), so a
+span-count query in production can undercount the true request total by one
+to two orders of magnitude — easily explaining a "huge difference" against
+any metric-based count (Prometheus/Grafana or Dynatrace) that someone
+assumes should agree with it. Use `sum(dynatrace.router.requests)` for a
+request total; reserve `fetch spans` for percentiles and trace-level detail,
+where sampling is an accepted, documented tradeoff, not a silent undercount.
+
+The `30`-out-of-`40` figure at `sampler: 1.0` above is itself informative: it
+is not sampling loss, it is one root span per request landing under a name
+your filter may or may not be excluding on purpose — see the next pitfall.
+
+**A root span's name depends on how the client sent the request, not just on
+what kind of operation it was.** Three requests, three outcomes, confirmed
+live: a named query gets `query <OperationName>`; a request that fails
+GraphQL validation (bad field, etc.) gets the generic `GraphQL Operation`,
+with no operation name to give it; and an *anonymous* query — no
+`query <Name> { }`, just `{ }` — also gets a **generic, unnamed** span
+(`query`, the operation type with no name), indistinguishable by name from
+any other unnamed operation. A DQL filter written to exclude introspection
+by name (`not(matchesValue(span.name, "query IntrospectionQuery"))`) only
+works if the client actually sends introspection as a **named** operation
+(`query IntrospectionQuery { __schema { ... } }`) — most tooling does, but an
+anonymous introspection call (`{ __schema { ... } }`, no name prefix) slips
+through unnamed and is not excluded by that filter. Confirm which shape your
+actual introspection traffic uses before trusting the exclusion.
+
 **Latency percentiles come from spans, not the duration histogram.**
 `percentile()` on a metric requires a `rollup` that collapses the interval first,
 so it returns the average — p50, p90 and p99 come back identical. See
@@ -59,7 +122,7 @@ so it returns the average — p50, p90 and p99 come back identical. See
 temporality — one dropped delta corrupts the total until restart. Dynatrace
 requires delta, so these are excluded throughout.
 
-**Some metrics Dynatrace refuses outright** — see [section 15](#15-metrics-dynatrace-rejects).
+**Some metrics Dynatrace refuses outright** — see [section 17](#17-metrics-dynatrace-rejects).
 
 ---
 
@@ -223,7 +286,7 @@ manifest and sending a request with an operation ID that isn't in it:
 | Metric | Answers | Type | Get it by | Where |
 |---|---|---|---|---|
 | `apollo.router.operations.persisted_queries` by `persisted_queries.not_found` | Was an operation rejected because its ID isn't in the manifest? | counter | `requires persisted queries` | metric |
-| `apollo.router.uplink.fetch.count.total` / `.duration.seconds` | Is the manifest being delivered at all? | counter / histogram | `default` | metric · [section 10](#10-diagnostic-sentinels--the-silent-failures) |
+| `apollo.router.uplink.fetch.count.total` / `.duration.seconds` | Is the manifest being delivered at all? | counter / histogram | `default` | metric · [section 12](#12-diagnostic-sentinels--the-silent-failures) |
 
 `persisted_queries.not_found = true` arrived in Dynatrace exactly as expected
 from that test. This is the counter to use for "how many requests are being
@@ -310,7 +373,8 @@ it — worth confirming which setting is in place before assuming either way.
 A coprocessor adds a network hop to every request it handles, and **its time is
 counted inside `apollo.router.overhead`** — so a slow coprocessor looks like router
 regression. Published measurements put Rhai at approximately 100 µs p95 and coprocessors at
-approximately 350 µs per stage; treat those as a budget. Coprocessors are invoked **per
+approximately 350 µs per stage; treat those as a budget, or measure Rhai directly
+via [section 10](#10-rhai). Coprocessors are invoked **per
 subgraph** at subgraph stages, so co-locate them.
 
 **Known limitation:** the GraphQL operation name is not propagated into the
@@ -318,9 +382,109 @@ Router→coprocessor span, so Dynatrace shows only `/`. Coprocessor cost cannot 
 attributed to an operation, and these metric tiles are the only coprocessor view
 available until that is addressed upstream.
 
+**Scope is a cost multiplier, not a fixed tax.** A coprocessor configured with
+`body: true` and `context: all` at the router stage, and `body: true`,
+`context: all`, `headers: true` and `uri: true` at every subgraph stage, means
+one client operation triggers a coprocessor round trip at the router stage
+plus one more per subgraph fetch in the query plan — each call serializing the
+full body and the entire context to JSON and waiting on a synchronous reply
+before the request continues. That cost is added serially, on every request,
+and it lands inside `apollo.router.overhead` above, so a broadly-scoped
+coprocessor shows up as router regression rather than as its own line item —
+and it multiplies the effect of anything else on the request path that slows
+down. Before enabling full body/context scope on every subgraph, confirm it's
+actually consumed at that stage; narrowing scope per-subgraph is supported and
+is the first lever to pull if overhead is climbing.
+
 ---
 
-## 10. Diagnostic sentinels — the silent failures
+## 10. Rhai
+
+| Metric | Answers | Type | Get it by | Where |
+|---|---|---|---|---|
+| `apollo.router.operations.rhai.duration` by `rhai.stage`, `rhai.succeeded` | How long does each Rhai callback take, and does it fail? | histogram | `requires rhai.scripts` | metric |
+
+Rhai runs **synchronously in the request path**, same as a coprocessor, but
+in-process rather than over a network hop — which is why it's roughly 3-4x
+cheaper per call (the ~100 µs p95 vs. ~350 µs per stage referenced in
+[section 9](#9-coprocessor)). Its time is counted inside
+`apollo.router.overhead` for the same reason a coprocessor's is: both are
+plugin execution, and the router doesn't distinguish the two in that
+histogram. A Rhai regression and a router regression look identical there —
+this metric is what separates them.
+
+`rhai.stage` names the lifecycle hook the callback ran in —
+`RouterRequest`, `RouterResponse`, `SupergraphRequest`, `SupergraphResponse`,
+`ExecutionRequest`, `ExecutionResponse`, `SubgraphRequest`, `SubgraphResponse`
+— so a script with hooks at multiple stages doesn't collapse into one
+"Rhai is slow" number; you can see which specific hook is adding time. As
+with the coprocessor in the previous section, a hook defined at
+`SubgraphRequest` or `SubgraphResponse` runs **once per subgraph fetch in the
+query plan**, not once per client operation — the same fan-out multiplier
+applies.
+
+`rhai.succeeded` is a boolean, and worth alerting on separately from
+duration: a script that throws terminates the request with an error, so a
+rise in `rhai.succeeded: false` is a correctness problem (a bad script
+deploy, an unexpected null in `context`), not a performance one, even though
+both surface through this same instrument.
+
+---
+
+## 11. Traffic shaping — timeout hierarchy
+
+Not a metric, but the config that decides which error code a subgraph timeout
+turns into — which then does show up in the metrics above, either as a
+`apollo.router.graphql_error` on a partial response or as a straight 504 on
+the whole operation, depending on which timeout fires first.
+
+With no `traffic_shaping` section configured, the router applies its preset
+default: **30 seconds for every timeout**, client-to-router and
+router-to-subgraph alike. [Apollo's own guidance](https://www.apollographql.com/docs/graphos/routing/performance/traffic-shaping)
+is explicit that these should not be equal:
+
+> Set your router timeout to be greater than your subgraph timeouts. This
+> difference provides a processing buffer, which enables the router to
+> properly handle subgraph timeouts and return appropriate error responses to
+> clients.
+
+With both at 30s, an unresponsive subgraph and the router's own timeout expire
+at effectively the same moment. The router has no buffer left to handle the
+subgraph timeout on its own terms, so instead of returning HTTP 200 with
+partial data and a scoped `SUBREQUEST_HTTP_ERROR`, it hits its own timeout
+first and returns HTTP 504 `GATEWAY_TIMEOUT` for the **entire** operation —
+turning one slow subgraph into a full-operation failure.
+
+Baseline configuration:
+
+```yaml
+traffic_shaping:
+  router:
+    timeout: 60s          # must be greater than every subgraph timeout below
+  all:
+    timeout: 30s           # default for any subgraph not named explicitly
+  subgraphs:
+    <subgraph-name>:
+      timeout: 10s          # fail fast on a subgraph known to be unreliable
+```
+
+Keep the router timeout below whatever ceiling exists at the edge/ingress and
+any sidecar proxy (Envoy, etc.) in front of it — otherwise the outer layer
+times out first and the router's own handling never gets a chance to run.
+
+**This treats the symptom, not the cause.** It stops one unresponsive
+subgraph from cancelling an entire operation, but a subgraph that is
+consistently timing out is still worth root-causing on its own — this config
+only changes what the client sees while that happens. It's also worth
+confirming this section hasn't silently regressed: a `traffic_shaping.router.timeout`
+that used to be set well above the preset can revert to the 30s default if the
+section is dropped from `router.yaml` (or moved to a config source that no
+longer applies) without a corresponding change entry — a ceiling that quietly
+drops raises the 504 rate without ever registering as a "recent change."
+
+---
+
+## 12. Diagnostic sentinels — the silent failures
 
 Nothing in this section shows up in RED metrics. Every one of them fails quietly
 while dashboards stay green.
@@ -350,7 +514,7 @@ The name also differs by exporter: `apollo_router_pipelines` on Prometheus.
 
 ---
 
-## 11. Memory (internals)
+## 13. Memory (internals)
 
 You will not look at these until you are chasing a leak or sizing a pod. Included
 for completeness; skip on a first pass.
@@ -369,7 +533,7 @@ leak in your graph. Both growing together is the real thing.
 
 ---
 
-## 12. Connectors and subscriptions
+## 14. Connectors and subscriptions
 
 Neither exists until the corresponding feature is configured. Confirm each one
 arrives before building a chart or alert on it.
@@ -378,16 +542,19 @@ arrives before building a chart or alert on it.
 |---|---|---|---|---|
 | `http.client.request.duration` by `connector.source.name` | Is a REST source degrading? Surfaces as router latency if not split out. | histogram | `requires Apollo Connectors` | metric |
 | `apollo.router.operations.subscriptions.terminated.client` | How often do clients terminate subscriptions? | counter | `requires subscriptions` | metric |
+| `apollo.router.skipped.event.count` | Are subscription events being dropped because a client can't keep up? | counter | `requires subscriptions` | metric |
 | `apollo.router.opened.subscriptions` | — | UpDownCounter | **excluded** | unusable under delta |
 
-A `skipped.event.count`-style instrument for dropped subscription events has been
-referenced in secondary material but could not be confirmed against this router's
-own configuration schema — check your router's version-specific instrument
-reference before building on that name.
+`apollo.router.skipped.event.count` fires when the subgraph produces events
+faster than a client consumes them — a client-side backpressure signal, not a
+subgraph outage. Confirmed against Apollo's own router-instrument reference
+(previous revisions of this doc could not confirm the name; it is
+`apollo.router.skipped.event.count`, not a `skipped.event.count`-style
+custom instrument).
 
 ---
 
-## 13. Container and host
+## 15. Container and host
 
 **Not router-emitted.** Dynatrace collects these itself via OneAgent or the
 Kubernetes operator, so there is nothing to configure in the router — but the data
@@ -399,12 +566,31 @@ meaning anything, because you are measuring scheduling delay rather than router
 work. Apollo's own deployment autoscales at 75% CPU; their sizing guidance suggests
 no CPU limit at all, to avoid throttling.
 
-Memory: prefer `jemalloc.resident` from section 11 over container RSS, since it
+**A hard CPU limit can hide behind a healthy-looking utilization graph.** When
+a container runs against `resources.limits.cpu`, the kernel throttles it in
+short bursts once it hits that ceiling, while the *averaged* utilization line
+can still read comfortably low — utilization and throttling are different
+signals, and only one of them shows a limit being hit. The one that reveals it
+is the container's CPU throttled time (the cgroup's throttling metric,
+collected the same way as the utilization metrics above), cross-checked
+against `kubectl describe pod` to confirm the limit is what you think it is. A
+tightly-limited pod running query planning, Rhai scripts, coprocessor calls,
+and Redis-backed caching under one ceiling is a credible way to get bursty
+latency that a CPU-usage-only dashboard never shows.
+
+**Graceful shutdown matters more once autoscaling is in play.** A pod without
+a `preStop` delay can start terminating mid scale-down while the Service (and
+any proxy in front of it, e.g. Envoy) is still routing connections to it —
+producing a burst of edge-visible 504s that has nothing to do with router
+health. If error spikes line up with HPA scaling or pod restart events, rule
+that in or out before chasing the router itself.
+
+Memory: prefer `jemalloc.resident` from section 13 over container RSS, since it
 attributes to the router process rather than the pod.
 
 ---
 
-## 14. Subgraph health — the gap
+## 16. Subgraph health — the gap
 
 **The most-requested signal that does not exist.** `/health` tells you the router
 pod is alive. It says nothing about whether subgraphs are reachable, so a router
@@ -434,7 +620,7 @@ cardinality.
 
 ---
 
-## 15. Metrics Dynatrace rejects
+## 17. Metrics Dynatrace rejects
 
 Dynatrace does not accept every OTLP metric type the router emits. Rejected metrics
 fail **at ingest**, not in the router, so the router logs look clean and the metric
