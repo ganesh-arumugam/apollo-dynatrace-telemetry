@@ -183,6 +183,48 @@ the question of which team owns a failure is answered by the schema.
 **Compare overhead only within one router version.** Work moves in and out of the
 router's critical path between releases.
 
+**Overhead falling while subgraph latency peaks is expected, not throttling.** A
+common load-test observation is that `apollo.router.overhead` is *lowest* exactly
+when `http.client.request.duration` is highest. Three things produce that shape:
+
+1. **Overhead excludes time spent waiting on subgraphs.** A slow subgraph adds to
+   `http.client.request.duration` and to the end-to-end request, not to overhead.
+   Check the `subgraph.active_requests == "false"` filter from the
+   [recipe](../dashboards/dql-queries.md#router-versus-subgraph) first — an
+   unfiltered chart mixes the two and is hard to read under load.
+2. **A closed-loop load generator sends less traffic when latency rises.** A tool
+   running a fixed number of threads or virtual users (JMeter's default thread-group
+   model, for example) waits for each response before sending the next request. When
+   the subgraph slows down, the request rate that actually reaches the router drops,
+   CPU contention drops with it, and so does overhead. Plot the *achieved* request rate
+   (`http.server.request.duration` count) against the *target* rate for the same window
+   before drawing conclusions.
+3. **Query deduplication.** With `traffic_shaping.all.deduplicate_query: true` (or
+   per subgraph), identical in-flight subgraph requests are merged into one call. A
+   slow subgraph means more requests overlap, more get merged, and the router does
+   less work per request.
+
+**Waiting on a subgraph does not queue other requests.** The router's request
+handling is asynchronous: a request waiting on a subgraph does not hold a
+thread, so there is no request thread pool to exhaust and no implicit back pressure
+from a slow subgraph. Inside the router, requests can wait in exactly two places:
+
+| Where | What waits | Read it with |
+|---|---|---|
+| Compute job queue | parsing, validation, query planning | §4 below |
+| Subgraph connection pool | opening new TCP/TLS connections | `apollo.router.connection.acquire.duration` |
+
+The connection pool matters more with slow subgraphs than it looks: over HTTP/1.1
+a connection carries one request at a time, so a slow subgraph keeps each connection
+busy longer and the router opens more new ones, each paying a handshake. Over HTTP/2,
+the subgraph's concurrent-stream limit caps parallelism per connection instead. If
+`connection.acquire.duration` is unavailable on your router version, compare
+`http.client.request.duration` against the subgraph's own server-side latency: the
+gap is time spent in the pool, a load balancer, or the network, not in the subgraph.
+
+Router-level `traffic_shaping` limits (concurrency, rate) reject excess requests
+rather than holding them in a line, so they show up as errors, not as latency.
+
 ---
 
 ## 4. Query planning and compute jobs
@@ -205,6 +247,23 @@ utilisation stays flat.
 | `apollo.router.query_planning.plan.evaluated_paths` | Same, at path granularity | histogram | `default` | metric |
 | `apollo.router.query_planner.memory` | Planner memory. **Unix + global-allocator feature only.** | gauge | `default` | metric |
 | `apollo.router.compute_jobs.active_jobs` | — | UpDownCounter | **excluded** | unusable under delta |
+| `apollo.router.compute_jobs.queue_is_full` | Were requests rejected because the queue was full? Any non-zero value is an incident. | counter | `default` (router 2.13.1+) | metric |
+
+**How the queue behaves.** CPU-heavy work — parsing, validation, query planning,
+introspection — runs on a dedicated thread pool, separate from request handling,
+sized by default to one thread per available CPU core. Jobs wait in a priority
+queue in front of it; cache warm-up after a schema reload runs at lower priority
+than live requests. The queue holds 1,000 jobs per thread. **When it is full, new
+requests are rejected with a back-pressure error rather than held** — visible as
+`apollo.router.compute_jobs.queue_is_full` and as `job.outcome = rejected_queue_full`
+on `apollo.router.compute_jobs.duration`.
+
+In steady state, with query plans served from cache, the queue sits near empty. A
+burst of distinct operations, a cold cache after a deploy, or a CPU-limited pod can
+fill it. To answer "is the router queueing internally during this load test?",
+chart `compute_jobs.queued` and `compute_jobs.queue.wait.duration` over the peak
+window: both near zero means the router is not queueing, and any added latency comes
+from the connection pool, the network, or the subgraph itself (§3).
 
 ---
 

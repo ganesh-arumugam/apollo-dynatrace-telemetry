@@ -152,6 +152,40 @@ unchanged.
   Studio data while Dynatrace keeps working — an NTP problem that looks like a
   metrics problem.
 
+## Router-reported vs client-measured latency
+
+A different comparison from Studio-vs-Dynatrace, and a common one during load tests:
+Dynatrace's view of the **caller** (OneAgent on the client service, or the load
+generator's own timings) shows a higher p95 than the router's
+`http.server.request.duration`. That is expected — they measure different spans of
+time.
+
+| | Starts | Ends | Includes |
+|---|---|---|---|
+| `http.server.request.duration` | the router begins handling the HTTP request | the router writes the response | router work + subgraph time |
+| Client-side span / load-test timer | the client sends | the client receives the last byte | all of the above **plus** network, load balancer / ingress, TLS, and any wait before the router accepts the connection |
+
+Some gap is normal and roughly constant. **A gap that widens at peak load points
+upstream of the router**: ingress connection limits, a sidecar proxy, or a router
+that is CPU-saturated and slow to accept connections (check container CPU throttling
+in [metrics.md](metrics.md) §15 and the compute queue in §4).
+
+To verify you are not measuring incorrectly, compare **per request, not per
+percentile**. Percentiles from two sources are not additive and may cover different
+populations (retries, other endpoints, non-GraphQL traffic). With trace context
+propagated from the client, pick a slow trace and lay its spans side by side:
+
+```dql
+fetch spans
+| filter trace.id == "<trace id from the client side>"
+| fields start_time, service.name, span.name, span.kind, duration
+| sort start_time asc
+```
+
+The client span's `duration` minus the router's root `SERVER` span `duration` is the
+time spent outside the router for that one request. If the router's root span is
+missing, check the router's tracing sampler and `parent_based_sampler` first.
+
 ## Pulling the Studio numbers
 
 ```bash

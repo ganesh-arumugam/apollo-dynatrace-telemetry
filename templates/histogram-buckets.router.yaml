@@ -110,3 +110,58 @@ telemetry:
                   - 15.0
                   - 20.0
                   - 30.0
+
+          # Subgraph latency lives in the same seconds range as the client-facing
+          # histogram, and is usually what you are tuning a load test around.
+          - name: http.client.request.duration
+            aggregation:
+              histogram:
+                buckets:
+                  - 0.01
+                  - 0.025
+                  - 0.05
+                  - 0.1
+                  - 0.25
+                  - 0.5
+                  - 0.75
+                  - 1.0
+                  - 1.5
+                  - 2.0
+                  - 3.0
+                  - 4.0
+                  - 5.0
+                  - 6.0
+                  - 7.0
+                  - 8.0
+                  - 9.0
+                  - 10.0
+                  - 12.0
+                  - 15.0
+                  - 20.0
+                  - 30.0    # keep >= your subgraph timeout
+
+          # Router overhead lives in a completely different range — sub-millisecond
+          # to tens of milliseconds. One shared bucket list cannot serve both: the
+          # seconds-range ladder above starts at 5 ms, which collapses most overhead
+          # samples into the first bucket. Give it its own millisecond ladder.
+          # Names must match exactly; a wildcard view silently matches nothing (DT027).
+          - name: apollo.router.overhead
+            aggregation:
+              histogram:
+                buckets:
+                  - 0.0001
+                  - 0.00025
+                  - 0.0005
+                  - 0.001
+                  - 0.0025
+                  - 0.005
+                  - 0.0075
+                  - 0.01
+                  - 0.015
+                  - 0.025
+                  - 0.05
+                  - 0.075
+                  - 0.1
+                  - 0.25
+                  - 0.5
+                  - 1.0
